@@ -3,24 +3,43 @@ import { normalizeRow } from "../domain/conference.js";
 export function parseFileMeta(fileName) {
   const clean = fileName.replace(/\.pdf$/i, "").replaceAll("_", " ").trim();
   const dateMatch = clean.match(/(\d{2})[-_.\/](\d{2})[-_.\/](\d{4})|(\d{4})[-_.\/](\d{2})[-_.\/](\d{2})/);
+  const timeMatch = clean.match(/\b(\d{2})[:h](\d{2})(?::(\d{2}))?\b/i);
   let reportDate = new Date().toISOString().slice(0, 10);
+  let reportTime = "";
   let stockName = clean;
   if (dateMatch) {
     if (dateMatch[1]) reportDate = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
     if (dateMatch[4]) reportDate = `${dateMatch[4]}-${dateMatch[5]}-${dateMatch[6]}`;
     stockName = clean.replace(dateMatch[0], "").replace(/^[-\s]+|[-\s]+$/g, "");
   }
-  return { reportDate, stockName: stockName || "Estoque sem nome" };
+  if (timeMatch) {
+    reportTime = `${timeMatch[1]}:${timeMatch[2]}:${timeMatch[3] || "00"}`;
+    stockName = stockName.replace(timeMatch[0], "").replace(/^[-\s]+|[-\s]+$/g, "");
+  }
+  return {
+    reportDate,
+    reportTime,
+    reportDateTime: buildReportDateTime(reportDate, reportTime),
+    stockName: stockName || "Estoque sem nome",
+  };
 }
 
 export function parsePdfMeta(text, fallback) {
-  const titleLine = text.split("\n").find((line) => /ESTOQUE/i.test(line) && /\bEM\b/i.test(line)) || "";
-  const match = titleLine.match(/-\s*(.+?)\s+EM\s+(\d{2})\/(\d{2})\/(\d{4})/i);
+  const titleLine = text.split("\n").find((line) => /\bEM\s+\d{2}\/\d{2}\/\d{4}/i.test(line)) || "";
+  const match = titleLine.match(/^(.+?)\s+EM\s+(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?/i);
   if (!match) return fallback;
+  const reportDate = `${match[4]}-${match[3]}-${match[2]}`;
+  const reportTime = match[5] ? `${match[5]}:${match[6]}:${match[7] || "00"}` : fallback.reportTime || "";
   return {
     stockName: match[1].trim(),
-    reportDate: `${match[4]}-${match[3]}-${match[2]}`,
+    reportDate,
+    reportTime,
+    reportDateTime: buildReportDateTime(reportDate, reportTime),
   };
+}
+
+function buildReportDateTime(reportDate, reportTime) {
+  return reportTime ? `${reportDate}T${reportTime}` : `${reportDate}T00:00:00`;
 }
 
 export async function readPdfText(file) {
@@ -55,9 +74,19 @@ export function groupPdfItemsIntoRows(items) {
   const orderedRows = rows
     .map((row) => ({ ...row, cells: row.cells.sort((a, b) => a.x - b.x) }))
     .sort((a, b) => b.y - a.y);
+  const textRows = orderedRows.map(formatPdfTextRow);
   const mappedRows = mapRowsByPdfHeaders(orderedRows);
-  if (mappedRows.length) return mappedRows;
-  return orderedRows.map((row) => row.cells.map((cell) => cell.text).join(" | "));
+  if (mappedRows.length) {
+    return [
+      ...textRows.filter((line) => /\bEM\s+\d{2}\/\d{2}\/\d{4}/i.test(line)),
+      ...mappedRows,
+    ];
+  }
+  return textRows;
+}
+
+function formatPdfTextRow(row) {
+  return row.cells.map((cell) => cell.text).join(" ").replace(/\s+/g, " ").trim();
 }
 
 export function parseRows(text) {

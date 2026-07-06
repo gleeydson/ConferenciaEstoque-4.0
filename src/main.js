@@ -20,9 +20,10 @@ const state = {
   activeProductHistory: null,
   activeStockName: "",
   importRows: [],
+  importMeta: null,
   importing: false,
   toast: "",
-  data: loadData(),
+  data: hydrateStoredData(loadData()),
 };
 
 const ROUTES = {
@@ -36,6 +37,20 @@ const ROUTES_BY_HASH = Object.fromEntries(Object.entries(ROUTES).map(([page, rou
 
 function saveData() {
   saveStoredData(state.data);
+}
+
+function hydrateStoredData(data) {
+  return {
+    conferences: (data.conferences || []).map((conference) => {
+      const fileMeta = conference.fileName ? parseFileMeta(conference.fileName) : {};
+      const reportTime = conference.reportTime || timeFromDateTime(conference.reportDateTime) || fileMeta.reportTime || "";
+      return {
+        ...conference,
+        reportTime,
+        reportDateTime: conference.reportDateTime || buildReportDateTime(conference.reportDate, reportTime),
+      };
+    }),
+  };
 }
 
 function createConference(report, previous) {
@@ -73,6 +88,8 @@ function createConference(report, previous) {
     id: crypto.randomUUID(),
     stockName: report.stockName || "Estoque sem nome",
     reportDate: report.reportDate || new Date().toISOString().slice(0, 10),
+    reportTime: report.reportTime || "",
+    reportDateTime: report.reportDateTime || buildReportDateTime(report.reportDate, report.reportTime),
     fileName: report.fileName,
     createdAt: new Date().toISOString(),
     status: "Pendente",
@@ -85,7 +102,32 @@ function createConference(report, previous) {
 function latestByStock(stockName) {
   return state.data.conferences
     .filter((item) => item.stockName.toLowerCase() === stockName.toLowerCase())
-    .sort((a, b) => new Date(b.reportDate) - new Date(a.reportDate))[0];
+    .sort((a, b) => new Date(getReportDateTime(b)) - new Date(getReportDateTime(a)))[0];
+}
+
+function buildReportDateTime(reportDate, reportTime = "") {
+  const date = reportDate || new Date().toISOString().slice(0, 10);
+  return reportTime ? `${date}T${reportTime}` : `${date}T00:00:00`;
+}
+
+function getReportDateTime(conference) {
+  return conference.reportDateTime || buildReportDateTime(conference.reportDate, conference.reportTime);
+}
+
+function formatReportDateTime(conference) {
+  const date = formatDate(conference.reportDate);
+  const time = getReportTime(conference);
+  return time ? `${date} ${time}` : date;
+}
+
+function getReportTime(conference) {
+  return conference.reportTime || timeFromDateTime(conference.reportDateTime);
+}
+
+function timeFromDateTime(value) {
+  const match = String(value || "").match(/T(\d{2}:\d{2}(?::\d{2})?)/);
+  if (!match || match[1] === "00:00:00" || match[1] === "00:00") return "";
+  return match[1].length === 5 ? `${match[1]}:00` : match[1];
 }
 
 function setPage(page) {
@@ -199,7 +241,6 @@ function render() {
         </div>
         <nav class="nav" aria-label="Navegacao principal">
           ${navButton("dashboard", "D", "Dashboard")}
-          ${navButton("import", "U", "Importar PDF")}
           ${navButton("stocks", "E", "Estoques")}
         </nav>
       </aside>
@@ -255,7 +296,7 @@ function renderDashboard() {
   const actions = `
     <button class="ghost-btn" id="importBackup" type="button">Restaurar dados</button>
     <button class="ghost-btn" id="exportBackup" type="button">Salvar dados</button>
-    <button class="primary-btn" data-page="import" type="button">Importar PDF</button>
+    <button class="primary-btn" data-page="stocks" type="button">Importar relatorio</button>
     <input id="backupInput" type="file" accept="application/json,.json" hidden />
   `;
 
@@ -266,7 +307,7 @@ function renderDashboard() {
         <div>
           <span class="eyebrow">Proxima acao</span>
           <h3>Continuar conferencia pendente</h3>
-          <p>${escapeHtml(nextConference.stockName)} · ${formatDate(nextConference.reportDate)} · ${formatIntegerDisplay(nextProgress.counted)}/${formatIntegerDisplay(nextProgress.total)} itens conferidos</p>
+          <p>${escapeHtml(nextConference.stockName)} · ${formatReportDateTime(nextConference)} · ${formatIntegerDisplay(nextProgress.counted)}/${formatIntegerDisplay(nextProgress.total)} itens conferidos</p>
         </div>
         <button class="primary-btn" data-open="${nextConference.id}" type="button">Continuar</button>
       ` : `
@@ -275,7 +316,7 @@ function renderDashboard() {
           <h3>${reports ? "Tudo conferido" : "Comece pela importacao"}</h3>
           <p>${reports ? "Nao ha conferencias pendentes. Importe o proximo PDF quando houver novo relatorio." : "Importe o primeiro PDF do estoque para iniciar a conferencia."}</p>
         </div>
-        <button class="primary-btn" data-page="import" type="button">Importar PDF</button>
+        <button class="primary-btn" data-page="stocks" type="button">Importar relatorio</button>
       `}
     </section>
     <section class="stats-grid grid dashboard-stats">
@@ -365,7 +406,7 @@ function renderImport() {
 }
 
 function renderHistory() {
-  const conferences = [...state.data.conferences].sort((a, b) => new Date(b.reportDate) - new Date(a.reportDate));
+  const conferences = [...state.data.conferences].sort((a, b) => new Date(getReportDateTime(b)) - new Date(getReportDateTime(a)));
   return `
     ${pageHeader("Historico", "Conferencias", "Consulte cada ciclo por data, status, estoque, itens e resumo de divergencias.", `<button class="primary-btn" data-page="import" type="button">Novo PDF</button>`)}
     <section class="panel">
@@ -381,7 +422,7 @@ function historyRow(conf, allowDelete = false) {
     <article class="history-row">
       <div>
         <h3>${escapeHtml(conf.stockName)}</h3>
-        <p>${formatDate(conf.reportDate)} · ${escapeHtml(conf.fileName || "relatorio")}</p>
+        <p>${formatReportDateTime(conf)} · ${escapeHtml(conf.fileName || "relatorio")}</p>
       </div>
       <div class="history-metrics">
         <span class="badge ${conf.status === "Concluida" ? "green" : "gray"}">${conf.status}</span>
@@ -408,11 +449,8 @@ function renderStocks() {
   const stockNames = Object.keys(groups).sort((a, b) => a.localeCompare(b));
   const selectedStock = stockNames.includes(state.activeStockName) ? state.activeStockName : "";
   state.activeStockName = selectedStock || "";
-  const selectedConferences = selectedStock ? [...groups[selectedStock]].sort((a, b) => new Date(a.reportDate) - new Date(b.reportDate)) : [];
-  const latestSelected = selectedConferences.at(-1);
-  const selectedMetrics = latestSelected ? getStockMetrics(latestSelected) : null;
   const rows = Object.entries(groups).map(([stock, conferences]) => {
-    const ordered = [...conferences].sort((a, b) => new Date(a.reportDate) - new Date(b.reportDate));
+    const ordered = [...conferences].sort((a, b) => new Date(getReportDateTime(a)) - new Date(getReportDateTime(b)));
     const stockHistory = [...ordered].reverse();
     const totalChanged = ordered.reduce((sum, item) => sum + getProgress(item).changed, 0);
     const latest = ordered.at(-1);
@@ -422,7 +460,7 @@ function renderStocks() {
         <article class="history-row stock-row ${stock === selectedStock ? "selected-stock" : ""}" data-stock="${escapeHtml(stock)}" tabindex="0" role="button" aria-label="Selecionar estoque ${escapeHtml(stock)}">
           <div>
             <h3>${escapeHtml(stock)}</h3>
-            <p>${formatIntegerDisplay(ordered.length)} conferencias · ultima em ${formatDate(latest.reportDate)} · ${metrics.alignedPercent}% alinhado</p>
+            <p>${formatIntegerDisplay(ordered.length)} conferencias · ultima em ${formatReportDateTime(latest)} · ${metrics.alignedPercent}% alinhado</p>
           </div>
           <div>
             <span class="badge blue">${formatIntegerDisplay(totalChanged)} alteracoes rastreadas</span>
@@ -439,39 +477,14 @@ function renderStocks() {
       </div>
     `;
   }).join("");
+  const actions = `
+    <button class="primary-btn" id="stockImportButton" type="button">${stockNames.length ? "Novo relatorio" : "Importar relatorio"}</button>
+    <input id="stockPdfInput" type="file" accept="application/pdf,.pdf" multiple hidden />
+  `;
 
   return `
-    ${pageHeader("Analise por estoque", "Resumo por estoque", "Veja alinhados, faltando, sobrando, pendentes e a trilha de mudancas de cada estoque.", "")}
-    ${stockNames.length ? `
-      <section class="stock-overview">
-        <div class="field">
-          <label for="stockSelect">Estoque</label>
-          <select id="stockSelect">
-            <option value="">Selecione um estoque</option>
-            ${stockNames.map((stock) => `<option value="${escapeHtml(stock)}" ${stock === selectedStock ? "selected" : ""}>${escapeHtml(stock)}</option>`).join("")}
-          </select>
-        </div>
-        ${latestSelected && selectedMetrics ? `
-          <div class="stock-summary">
-            <div>
-              <strong>${escapeHtml(selectedStock)}</strong>
-              <p>Ultima conferencia em ${formatDate(latestSelected.reportDate)} · ${formatIntegerDisplay(selectedConferences.length)} ciclos registrados</p>
-            </div>
-            <div class="stock-actions">
-              <button class="primary-btn" data-open="${latestSelected.id}" type="button">Abrir conferencia</button>
-              <button class="icon-btn danger-icon" data-delete-stock="${escapeHtml(selectedStock)}" type="button" title="Excluir estoque" aria-label="Excluir estoque">${trashIcon()}</button>
-            </div>
-          </div>
-          <div class="stock-metrics">
-            ${metricCard("Alinhados", selectedMetrics.aligned, selectedMetrics.alignedPercent, "green")}
-            ${metricCard("Faltando", selectedMetrics.missing, selectedMetrics.missingPercent, "red")}
-            ${metricCard("Sobrando", selectedMetrics.surplus, selectedMetrics.surplusPercent, "amber")}
-            ${metricCard("Pendentes", selectedMetrics.pending, selectedMetrics.pendingPercent, "gray")}
-          </div>
-        ` : ""}
-      </section>
-    ` : ""}
-    <section class="panel">${rows || emptyState("Sem estoques", "Importe relatorios para formar a evolucao por estoque.")}</section>
+    ${pageHeader("Analise por estoque", "Resumo por estoque", "Veja alinhados, faltando, sobrando, pendentes e a trilha de mudancas de cada estoque.", actions)}
+    <section class="panel">${rows || emptyState("Nenhum estoque ainda", "Os estoques aparecem automaticamente depois que voce importa um ou mais relatorios PDF.", `<button class="primary-btn" id="emptyStockImportButton" type="button">Importar relatorio</button>`)}</section>
   `;
 }
 
@@ -497,7 +510,7 @@ function stockHistoryRow(conf) {
   return `
     <article class="stock-history-row">
       <div>
-        <strong>${formatDate(conf.reportDate)}</strong>
+        <strong>${formatReportDateTime(conf)}</strong>
         <span>${escapeHtml(conf.fileName || "relatorio")}</span>
       </div>
       <div class="history-metrics">
@@ -548,7 +561,7 @@ function renderConference(conf) {
   `;
 
   return `
-    ${pageHeader(conf.status, escapeHtml(conf.stockName), `${formatDate(conf.reportDate)} · ${formatIntegerDisplay(progress.changed)} itens mudaram desde o relatorio anterior.`, actions, "conference-header")}
+    ${pageHeader(conf.status, escapeHtml(conf.stockName), `${formatReportDateTime(conf)} · ${formatIntegerDisplay(progress.changed)} itens mudaram desde o relatorio anterior.`, actions, "conference-header")}
     <section class="stats-grid grid compact-stats conference-stats">
       ${stat("Contados", `${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)}`, "counted")}
       ${stat("Pendentes", progress.pending, "pending")}
@@ -665,7 +678,7 @@ function renderProductHistory(conf) {
       return { conference: item, row, diff };
     })
     .filter(Boolean)
-    .sort((a, b) => new Date(b.conference.reportDate) - new Date(a.conference.reportDate));
+    .sort((a, b) => new Date(getReportDateTime(b.conference)) - new Date(getReportDateTime(a.conference)));
 
   return `
     <aside class="history-panel">
@@ -676,7 +689,7 @@ function renderProductHistory(conf) {
       <div class="history-timeline">
         ${entries.map((entry) => `
           <article>
-            <span>${formatDate(entry.conference.reportDate)}</span>
+            <span>${formatReportDateTime(entry.conference)}</span>
             <b>${formatIntegerDisplay(entry.row.quantidade)}</b>
             <em>${entry.diff === null ? "Sem contagem" : entry.diff === 0 ? "Alinhado" : `Divergencia ${signed(entry.diff)}`}</em>
             ${entry.row.observacao ? `<small>${escapeHtml(entry.row.observacao)}</small>` : ""}
@@ -721,13 +734,14 @@ function bindEvents() {
   document.querySelectorAll("[data-delete-conference]").forEach((button) => {
     button.addEventListener("click", () => deleteConference(button.dataset.deleteConference));
   });
-  const stockSelect = document.getElementById("stockSelect");
-  if (stockSelect) {
-    stockSelect.addEventListener("change", () => {
-      state.activeStockName = stockSelect.value;
-      render();
-    });
-  }
+  const stockPdfInput = document.getElementById("stockPdfInput");
+  const openStockImport = () => stockPdfInput?.click();
+  document.getElementById("stockImportButton")?.addEventListener("click", openStockImport);
+  document.getElementById("emptyStockImportButton")?.addEventListener("click", openStockImport);
+  stockPdfInput?.addEventListener("change", async () => {
+    await importStockPdfFiles([...stockPdfInput.files]);
+    stockPdfInput.value = "";
+  });
   document.querySelectorAll("[data-history]").forEach((button) => {
     button.addEventListener("click", () => {
       state.activeProductHistory = state.activeProductHistory === button.dataset.history ? null : button.dataset.history;
@@ -793,7 +807,7 @@ function toggleStockHistory(stockName) {
 function deleteConference(id) {
   const conference = state.data.conferences.find((item) => item.id === id);
   if (!conference) return;
-  const confirmed = window.confirm(`Excluir o relatorio de ${conference.stockName} em ${formatDate(conference.reportDate)}?`);
+  const confirmed = window.confirm(`Excluir o relatorio de ${conference.stockName} em ${formatReportDateTime(conference)}?`);
   if (!confirmed) return;
 
   state.data.conferences = state.data.conferences.filter((item) => item.id !== id);
@@ -820,6 +834,58 @@ function deleteStock(stockName) {
 
   if (state.page === "conference") navigateToPage("stocks");
   else render();
+}
+
+async function importStockPdfFiles(files) {
+  const pdfs = files.filter((file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf");
+  if (!pdfs.length) return;
+
+  let imported = 0;
+  let lastConference = null;
+  showToast(`Importando ${pdfs.length} relatorio${pdfs.length > 1 ? "s" : ""}...`);
+
+  for (const file of pdfs) {
+    try {
+      const conference = await importConferenceFromPdf(file);
+      if (conference) {
+        imported += 1;
+        lastConference = conference;
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  if (!imported) {
+    showToast("Nenhum relatorio valido foi importado.");
+    render();
+    return;
+  }
+
+  saveData();
+  state.activeStockName = lastConference.stockName;
+  showToast(`${imported} relatorio${imported > 1 ? "s" : ""} importado${imported > 1 ? "s" : ""}.`);
+  render();
+}
+
+async function importConferenceFromPdf(file) {
+  const fallback = parseFileMeta(file.name);
+  const text = await readPdfText(file);
+  const meta = parsePdfMeta(text, fallback);
+  const rows = parseRows(text);
+  if (!rows.length) return null;
+
+  const previous = latestByStock(meta.stockName);
+  const conference = createConference({
+    stockName: meta.stockName,
+    reportDate: meta.reportDate,
+    reportTime: meta.reportTime,
+    reportDateTime: meta.reportDateTime,
+    fileName: file.name,
+    rows,
+  }, previous);
+  state.data.conferences.unshift(conference);
+  return conference;
 }
 
 function bindBackupEvents() {
@@ -890,7 +956,7 @@ function updateLiveRow(conf, row) {
 function updateLiveBadges(conf) {
   const progress = getProgress(conf);
   const subtitle = document.querySelector(".page-subtitle");
-  if (subtitle) subtitle.textContent = `${formatDate(conf.reportDate)} · ${formatIntegerDisplay(progress.changed)} itens mudaram desde o relatorio anterior.`;
+  if (subtitle) subtitle.textContent = `${formatReportDateTime(conf)} · ${formatIntegerDisplay(progress.changed)} itens mudaram desde o relatorio anterior.`;
   const eyebrow = document.querySelector(".eyebrow");
   if (eyebrow) eyebrow.textContent = conf.status;
   const finishButton = document.getElementById("finishConference");
@@ -944,6 +1010,7 @@ function bindImportEvents() {
     document.getElementById("stockName").value = "2.12 Estoque Material";
     document.getElementById("reportDate").value = new Date().toISOString().slice(0, 10);
     document.getElementById("fileName").value = "05-07-2026 - 2.12 Estoque Material.pdf";
+    state.importMeta = null;
     state.importRows = parseRows(seedRows.map((row, index) => {
       const quantity = row.quantidade + [1, 0, -5, 0, 3, 0, 0, -2][index];
       return `${row.id} | ${row.produto} | ${row.reservados} | ${quantity}`;
@@ -958,6 +1025,7 @@ function bindImportEvents() {
 async function handleFile(file) {
   if (!file) return;
   state.importRows = [];
+  state.importMeta = null;
   document.getElementById("fileName").value = file.name;
   setImportPreview("Lendo PDF...");
   const meta = parseFileMeta(file.name);
@@ -967,6 +1035,7 @@ async function handleFile(file) {
   try {
     const text = await readPdfText(file);
     const pdfMeta = parsePdfMeta(text, meta);
+    state.importMeta = pdfMeta;
     document.getElementById("stockName").value = pdfMeta.stockName;
     document.getElementById("reportDate").value = pdfMeta.reportDate;
     const rows = parseRows(text);
@@ -1002,10 +1071,18 @@ function finishImportFlow() {
   }
 
   const previous = latestByStock(stockName);
-  const conference = createConference({ stockName, reportDate, fileName, rows }, previous);
+  const conference = createConference({
+    stockName,
+    reportDate,
+    reportTime: state.importMeta?.reportTime || "",
+    reportDateTime: state.importMeta?.reportDateTime || buildReportDateTime(reportDate, state.importMeta?.reportTime || ""),
+    fileName,
+    rows,
+  }, previous);
   state.data.conferences.unshift(conference);
   saveData();
   state.importRows = [];
+  state.importMeta = null;
   showToast(previous ? "Relatorio mesclado e comparado ao anterior." : "Primeira conferencia criada.");
   navigateToConference(conference.id);
 }

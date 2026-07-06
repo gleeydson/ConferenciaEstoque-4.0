@@ -346,45 +346,6 @@ button:disabled {
   font-size: 20px;
 }
 
-.stock-overview {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.stock-overview > .field {
-  max-width: 520px;
-}
-
-.stock-summary {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow);
-}
-
-.stock-summary strong {
-  display: block;
-  font-size: 16px;
-}
-
-.stock-summary p {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.stock-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
 .metric-card {
   padding: 13px 14px;
   border: 1px solid var(--line);
@@ -1178,11 +1139,6 @@ tbody tr.removed:focus-within { box-shadow: inset 4px 0 0 var(--red); }
     font-size: 26px;
   }
 
-  .stock-metrics {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
-  }
-
   .metric-card {
     padding: 11px 12px;
   }
@@ -1323,12 +1279,10 @@ tbody tr.removed:focus-within { box-shadow: inset 4px 0 0 var(--red); }
   .actions { justify-content: flex-start; }
   .stats-grid,
   .form-grid,
-  .dashboard-stats,
-  .stock-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .next-action { align-items: stretch; flex-direction: column; }
   .conference-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .import-shell { grid-template-columns: 1fr; }
-  .stock-summary { align-items: stretch; flex-direction: column; }
   .history-row { grid-template-columns: 1fr; }
   .stock-history {
     margin: 0 10px 12px;
@@ -1344,7 +1298,6 @@ tbody tr.removed:focus-within { box-shadow: inset 4px 0 0 var(--red); }
   .page-title { font-size: 38px; }
   .upload-content { align-items: flex-start; flex-direction: column; }
   .import-actions { flex-direction: column; }
-  .stock-metrics { grid-template-columns: 1fr; }
   .panel-header,
   .table-tools { align-items: stretch; flex-direction: column; }
   .segmented { width: 100%; }

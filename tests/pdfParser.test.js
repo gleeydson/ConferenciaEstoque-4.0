@@ -8,6 +8,7 @@ function item(text, x, y) {
 
 test("maps fixed PDF columns and keeps roll count from continuation row", () => {
   const lines = groupPdfItemsIntoRows([
+    item("1.11 - ESTOQUE DE LOCACAO JUPITER TELECOM - DOM ELISEU EM 05/07/2026 17:17:16", 345, 742),
     item("ID", 53, 714),
     item("PRODUTO", 273, 714),
     item("CATEGORIA", 603, 714),
@@ -26,6 +27,9 @@ test("maps fixed PDF columns and keeps roll count from continuation row", () => 
   ]);
 
   const rows = parseRows(lines.join("\n"));
+  const meta = parsePdfMeta(lines.join("\n"), parseFileMeta("1.11 - ESTOQUE DE LOCACAO JUPITER TELECOM.pdf"));
+
+  assert.equal(meta.reportTime, "17:17:16");
   assert.equal(rows.length, 1);
   assert.equal(rows[0].id, "22947");
   assert.equal(rows[0].reservados, 0);
@@ -64,6 +68,15 @@ test("extracts metadata from filename and PDF title", () => {
   assert.equal(fallback.reportDate, "2026-07-05");
 
   const meta = parsePdfMeta("1.11 - ESTOQUE DE LOCACAO JUPITER TELECOM - DOM ELISEU EM 01/07/2026 10:09:12", fallback);
-  assert.equal(meta.stockName, "ESTOQUE DE LOCACAO JUPITER TELECOM - DOM ELISEU");
+  assert.equal(meta.stockName, "1.11 - ESTOQUE DE LOCACAO JUPITER TELECOM - DOM ELISEU");
   assert.equal(meta.reportDate, "2026-07-01");
+  assert.equal(meta.reportTime, "10:09:12");
+  assert.equal(meta.reportDateTime, "2026-07-01T10:09:12");
+
+  const withTime = parseFileMeta("05-07-2026 17h17 - 1.11 - ESTOQUE DE LOCACAO.pdf");
+  assert.equal(withTime.reportTime, "17:17:00");
+
+  const warehouse = parsePdfMeta("4.010 - TI 1 - ALMOXARIFADO TI 1 DOM ELISEU EM 06/07/2026 23:14:08", fallback);
+  assert.equal(warehouse.stockName, "4.010 - TI 1 - ALMOXARIFADO TI 1 DOM ELISEU");
+  assert.equal(warehouse.reportTime, "23:14:08");
 });
