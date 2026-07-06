@@ -1,6 +1,6 @@
 import { createBackupPayload, downloadJson, loadData, saveStoredData } from "./state/storage.js";
 import { getDiff, getProgress, getRowStatus, normalizeRow, numberOrZero } from "./domain/conference.js";
-import { formatImportedRow, parseFileMeta, parsePdfMeta, parseRows, readPdfText } from "./import/pdfParser.js";
+import { parseFileMeta, parsePdfMeta, parseRows, readPdfText } from "./import/pdfParser.js";
 
 const seedRows = [
   { id: "1001", produto: "Cadeira Tiffany cristal", reservados: 4, quantidade: 32 },
@@ -16,13 +16,23 @@ const seedRows = [
 const state = {
   page: "dashboard",
   filter: "todos",
-  query: "",
   activeConferenceId: null,
   activeProductHistory: null,
+  activeStockName: "",
+  importRows: [],
   importing: false,
   toast: "",
   data: loadData(),
 };
+
+const ROUTES = {
+  dashboard: "dashboard",
+  import: "importar",
+  history: "historico",
+  stocks: "estoques",
+};
+
+const ROUTES_BY_HASH = Object.fromEntries(Object.entries(ROUTES).map(([page, route]) => [route, page]));
 
 function saveData() {
   saveStoredData(state.data);
@@ -79,19 +89,58 @@ function latestByStock(stockName) {
 }
 
 function setPage(page) {
+  navigateToPage(page);
+}
+
+function applyPage(page) {
   state.page = page;
   state.filter = "todos";
-  state.query = "";
   render();
 }
 
 function setActiveConference(id) {
+  navigateToConference(id);
+}
+
+function applyActiveConference(id) {
   state.activeConferenceId = id;
   state.page = "conference";
   state.filter = "todos";
-  state.query = "";
   state.activeProductHistory = null;
   render();
+}
+
+function navigateToPage(page) {
+  const route = ROUTES[page] || ROUTES.dashboard;
+  setHash(`#${route}`);
+}
+
+function navigateToConference(id) {
+  setHash(`#conferencia/${encodeURIComponent(id)}`);
+}
+
+function setHash(hash) {
+  if (window.location.hash === hash) {
+    applyRouteFromHash();
+    return;
+  }
+  window.location.hash = hash;
+}
+
+function applyRouteFromHash() {
+  const hash = decodeURIComponent(window.location.hash.replace(/^#\/?/, ""));
+  const [route, id] = hash.split("/");
+
+  if (route === "conferencia" && id) {
+    const exists = state.data.conferences.some((item) => item.id === id);
+    if (exists) {
+      applyActiveConference(id);
+      return;
+    }
+  }
+
+  const page = ROUTES_BY_HASH[route] || "dashboard";
+  applyPage(page);
 }
 
 function showToast(message) {
@@ -182,9 +231,9 @@ function renderPage() {
   return renderDashboard();
 }
 
-function pageHeader(eyebrow, title, subtitle, actions = "") {
+function pageHeader(eyebrow, title, subtitle, actions = "", className = "") {
   return `
-    <header class="topbar">
+    <header class="topbar ${className}">
       <div>
         <div class="eyebrow">${eyebrow}</div>
         <h2 class="page-title">${title}</h2>
@@ -219,7 +268,7 @@ function renderDashboard() {
         <h3 class="panel-title">Conferencias recentes</h3>
         <button class="ghost-btn" data-page="history" type="button">Ver historico</button>
       </div>
-      ${recent.length ? recent.map(historyRow).join("") : emptyState("Nenhuma conferencia", "Importe o primeiro relatorio PDF para iniciar a trilha.")}
+      ${recent.length ? recent.map(historyRow).join("") : emptyState("Nenhuma conferencia", "Para começar, importe o relatório PDF do estoque.", `<button class="primary-btn" data-page="import" type="button">Importar primeiro PDF</button>`)}
     </section>
   `;
 }
@@ -228,43 +277,74 @@ function stat(label, value, key = "") {
   return `<article class="stat"><span>${label}</span><strong class="mono" ${key ? `data-stat="${key}"` : ""}>${formatIntegerDisplay(value)}</strong></article>`;
 }
 
+function metricCard(label, value, percent, color) {
+  return `
+    <article class="metric-card ${color}">
+      <span>${label}</span>
+      <strong class="mono">${formatIntegerDisplay(value)}</strong>
+      <small>${percent}% do total</small>
+    </article>
+  `;
+}
+
+function trashIcon() {
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 7h16" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M6 7l1 14h10l1-14" />
+      <path d="M9 7V4h6v3" />
+    </svg>
+  `;
+}
+
 function renderImport() {
   return `
-    ${pageHeader("Importacao", "Novo relatorio", "Envie um PDF. O sistema tenta extrair data e estoque pelo nome do arquivo e importa apenas ID, PRODUTO, RESERVADOS e QUANTIDADE.", "")}
+    ${pageHeader("Importacao", "Novo relatorio", "Selecione o PDF do estoque. Depois confira os dados e crie a conferencia.", "")}
     <section class="panel">
-      <div class="panel-body">
-        <label class="upload-zone" id="dropZone">
-          <input id="pdfInput" type="file" accept="application/pdf,.pdf" />
-          <div>
-            <div class="upload-symbol">PDF</div>
-            <h2>Solte o PDF aqui</h2>
-            <p>Ou clique para selecionar. Exemplo de nome: <strong>05-07-2026 - 2.12 Estoque Material.pdf</strong></p>
-          </div>
-        </label>
-        <form id="manualForm" class="form-grid" aria-label="Dados do relatorio">
-          <div class="field">
-            <label for="stockName">Nome do estoque</label>
-            <input id="stockName" placeholder="2.12 Estoque Material" required />
-          </div>
-          <div class="field">
-            <label for="reportDate">Data do relatorio</label>
-            <input id="reportDate" type="date" required />
-          </div>
-          <div class="field">
-            <label for="fileName">Arquivo</label>
-            <input id="fileName" placeholder="Aguardando PDF" readonly />
-          </div>
-        </form>
-        <div class="field" style="margin-top: 14px;">
-          <label for="pasteRows">Fallback de importacao</label>
-          <textarea id="pasteRows" placeholder="Cole linhas do relatorio se o PDF nao tiver texto selecionavel. Formato: ID | PRODUTO | RESERVADOS | QUANTIDADE | BOBINAS"></textarea>
-          <div class="helper">PDFs escaneados dependem de OCR externo. Para relatorios textuais, a extracao acontece no navegador com PDF.js.</div>
+      <div class="import-shell">
+        <div class="import-main">
+          <div class="step-label"><span>1</span> Selecionar PDF</div>
+          <label class="upload-zone compact-upload" id="dropZone">
+            <input id="pdfInput" type="file" accept="application/pdf,.pdf" />
+            <div class="upload-content">
+              <div class="upload-symbol">PDF</div>
+              <div>
+                <h2>Arraste o PDF ou clique para selecionar</h2>
+                <p>Use o relatorio do estoque. O sistema importa ID, produto, reservados, quantidade e bobinas.</p>
+              </div>
+            </div>
+          </label>
+          <div id="importPreview" class="import-preview" hidden></div>
         </div>
-        <div id="importPreview" class="import-preview" hidden></div>
-        <div class="actions" style="margin-top: 16px;">
-          <button class="ghost-btn" id="demoImport" type="button">Usar exemplo</button>
-          <button class="primary-btn" id="finishImport" type="button">Criar conferencia</button>
-        </div>
+        <aside class="import-side">
+          <div class="step-label"><span>2</span> Conferir dados</div>
+          <form id="manualForm" class="import-form" aria-label="Dados do relatorio">
+            <div class="field">
+              <label for="stockName">Estoque</label>
+              <input id="stockName" placeholder="Ex: 2.12 Estoque Material" required />
+            </div>
+            <div class="field">
+              <label for="reportDate">Data do relatorio</label>
+              <input id="reportDate" type="date" required />
+            </div>
+            <div class="field">
+              <label for="fileName">Arquivo selecionado</label>
+              <input id="fileName" placeholder="Nenhum PDF selecionado" readonly />
+            </div>
+          </form>
+          <div class="import-checklist">
+            <strong>Antes de criar</strong>
+            <span>Confira se o estoque e a data estao corretos.</span>
+            <span>A conferencia sera comparada com o ultimo PDF desse estoque.</span>
+            <span>Se o PDF for lido corretamente, os itens aparecem na previa.</span>
+          </div>
+          <div class="actions import-actions">
+            <button class="ghost-btn" id="demoImport" type="button">Carregar exemplo</button>
+            <button class="primary-btn" id="finishImport" type="button">Criar conferencia</button>
+          </div>
+        </aside>
       </div>
     </section>
   `;
@@ -275,25 +355,32 @@ function renderHistory() {
   return `
     ${pageHeader("Historico", "Conferencias", "Consulte cada ciclo por data, status, estoque, itens e resumo de divergencias.", `<button class="primary-btn" data-page="import" type="button">Novo PDF</button>`)}
     <section class="panel">
-      ${conferences.length ? conferences.map(historyRow).join("") : emptyState("Historico vazio", "As conferencias importadas aparecerao aqui.")}
+      ${conferences.length ? conferences.map((conf) => historyRow(conf, true)).join("") : emptyState("Historico vazio", "As conferencias importadas aparecerao aqui.")}
     </section>
   `;
 }
 
-function historyRow(conf) {
+function historyRow(conf, allowDelete = false) {
   const progress = getProgress(conf);
+  const metrics = getStockMetrics(conf);
   return `
     <article class="history-row">
       <div>
         <h3>${escapeHtml(conf.stockName)}</h3>
         <p>${formatDate(conf.reportDate)} · ${escapeHtml(conf.fileName || "relatorio")}</p>
       </div>
-      <div>
+      <div class="history-metrics">
         <span class="badge ${conf.status === "Concluida" ? "green" : "gray"}">${conf.status}</span>
-        <span class="badge ${progress.divergent ? "red" : "green"}">${formatIntegerDisplay(progress.divergent)} divergencias</span>
-        <span class="badge ${progress.changed ? "blue" : "gray"}">${formatIntegerDisplay(progress.changed)} alterados</span>
+        <span class="badge blue">${formatIntegerDisplay(progress.counted)} conferidos</span>
+        <span class="badge green">${formatIntegerDisplay(metrics.aligned)} alinhados</span>
+        <span class="badge red">${formatIntegerDisplay(metrics.missing)} faltando</span>
+        <span class="badge amber">${formatIntegerDisplay(metrics.surplus)} sobrando</span>
+        <span class="badge gray">${formatIntegerDisplay(metrics.pending)} pendentes</span>
       </div>
-      <button class="ghost-btn" data-open="${conf.id}" type="button">${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)} itens</button>
+      <div class="row-actions">
+        <button class="ghost-btn" data-open="${conf.id}" type="button">${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)} itens</button>
+        ${allowDelete ? `<button class="icon-btn danger-icon" data-delete-conference="${conf.id}" type="button" title="Excluir relatorio" aria-label="Excluir relatorio">${trashIcon()}</button>` : ""}
+      </div>
     </article>
   `;
 }
@@ -304,29 +391,90 @@ function renderStocks() {
     acc[item.stockName].push(item);
     return acc;
   }, {});
+  const stockNames = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+  const selectedStock = stockNames.includes(state.activeStockName) ? state.activeStockName : stockNames[0];
+  state.activeStockName = selectedStock || "";
+  const selectedConferences = selectedStock ? [...groups[selectedStock]].sort((a, b) => new Date(a.reportDate) - new Date(b.reportDate)) : [];
+  const latestSelected = selectedConferences.at(-1);
+  const selectedMetrics = latestSelected ? getStockMetrics(latestSelected) : null;
   const rows = Object.entries(groups).map(([stock, conferences]) => {
-    const ordered = conferences.sort((a, b) => new Date(a.reportDate) - new Date(b.reportDate));
+    const ordered = [...conferences].sort((a, b) => new Date(a.reportDate) - new Date(b.reportDate));
     const totalChanged = ordered.reduce((sum, item) => sum + getProgress(item).changed, 0);
     const latest = ordered.at(-1);
+    const metrics = getStockMetrics(latest);
     return `
-      <article class="history-row">
+      <article class="history-row stock-row ${stock === selectedStock ? "selected-stock" : ""}" data-stock="${escapeHtml(stock)}" tabindex="0" role="button" aria-label="Selecionar estoque ${escapeHtml(stock)}">
         <div>
           <h3>${escapeHtml(stock)}</h3>
-          <p>${formatIntegerDisplay(ordered.length)} conferencias · ultima em ${formatDate(latest.reportDate)}</p>
+          <p>${formatIntegerDisplay(ordered.length)} conferencias · ultima em ${formatDate(latest.reportDate)} · ${metrics.alignedPercent}% alinhado</p>
         </div>
         <div>
           <span class="badge blue">${formatIntegerDisplay(totalChanged)} alteracoes rastreadas</span>
+          <span class="badge green">${formatIntegerDisplay(metrics.aligned)} alinhados</span>
+          <span class="badge red">${formatIntegerDisplay(metrics.missing)} faltando</span>
+          <span class="badge amber">${formatIntegerDisplay(metrics.surplus)} sobrando</span>
           <span class="badge ${latest.status === "Pendente" ? "gray" : "green"}">${latest.status}</span>
         </div>
-        <button class="ghost-btn" data-open="${latest.id}" type="button">Abrir ultima</button>
+        <div class="stock-actions">
+          <button class="ghost-btn" data-open="${latest.id}" type="button">Abrir ultima</button>
+          <button class="icon-btn danger-icon" data-delete-stock="${escapeHtml(stock)}" type="button" title="Excluir estoque" aria-label="Excluir estoque">${trashIcon()}</button>
+        </div>
       </article>
     `;
   }).join("");
 
   return `
-    ${pageHeader("Analise por estoque", "Evolucao diaria", "Veja a trilha de mudancas e investigue produtos que se movimentaram sem contagem fisica correspondente.", "")}
+    ${pageHeader("Analise por estoque", "Resumo por estoque", "Veja alinhados, faltando, sobrando, pendentes e a trilha de mudancas de cada estoque.", "")}
+    ${stockNames.length ? `
+      <section class="stock-overview">
+        <div class="field">
+          <label for="stockSelect">Estoque</label>
+          <select id="stockSelect">
+            ${stockNames.map((stock) => `<option value="${escapeHtml(stock)}" ${stock === selectedStock ? "selected" : ""}>${escapeHtml(stock)}</option>`).join("")}
+          </select>
+        </div>
+        ${latestSelected && selectedMetrics ? `
+          <div class="stock-summary">
+            <div>
+              <strong>${escapeHtml(selectedStock)}</strong>
+              <p>Ultima conferencia em ${formatDate(latestSelected.reportDate)} · ${formatIntegerDisplay(selectedConferences.length)} ciclos registrados</p>
+            </div>
+            <div class="stock-actions">
+              <button class="primary-btn" data-open="${latestSelected.id}" type="button">Abrir conferencia</button>
+              <button class="icon-btn danger-icon" data-delete-stock="${escapeHtml(selectedStock)}" type="button" title="Excluir estoque" aria-label="Excluir estoque">${trashIcon()}</button>
+            </div>
+          </div>
+          <div class="stock-metrics">
+            ${metricCard("Alinhados", selectedMetrics.aligned, selectedMetrics.alignedPercent, "green")}
+            ${metricCard("Faltando", selectedMetrics.missing, selectedMetrics.missingPercent, "red")}
+            ${metricCard("Sobrando", selectedMetrics.surplus, selectedMetrics.surplusPercent, "amber")}
+            ${metricCard("Pendentes", selectedMetrics.pending, selectedMetrics.pendingPercent, "gray")}
+          </div>
+        ` : ""}
+      </section>
+    ` : ""}
     <section class="panel">${rows || emptyState("Sem estoques", "Importe relatorios para formar a evolucao por estoque.")}</section>
   `;
+}
+
+function getStockMetrics(conference) {
+  const total = conference.rows.length || 0;
+  const metrics = conference.rows.reduce((acc, row) => {
+    const diff = getDiff(row);
+    if (diff === null) acc.pending += 1;
+    else if (diff === 0) acc.aligned += 1;
+    else if (diff < 0) acc.missing += 1;
+    else acc.surplus += 1;
+    return acc;
+  }, { aligned: 0, missing: 0, surplus: 0, pending: 0 });
+  const percent = (value) => (total ? Math.round((value / total) * 100) : 0);
+  return {
+    ...metrics,
+    alignedPercent: percent(metrics.aligned),
+    missingPercent: percent(metrics.missing),
+    surplusPercent: percent(metrics.surplus),
+    pendingPercent: percent(metrics.pending),
+  };
 }
 
 function renderConference(conf) {
@@ -335,20 +483,22 @@ function renderConference(conf) {
   const rows = filteredRows(conf);
   const actions = `
     <button class="ghost-btn" data-page="import" type="button">Atualizar com PDF</button>
-    <button class="primary-btn" id="finishConference" type="button">${progress.pending ? "Marcar pendente" : "Concluir"}</button>
+    <button class="ghost-btn" id="savePendingConference" type="button">Salvar pendente</button>
+    <button class="icon-btn danger-icon" data-delete-conference="${conf.id}" type="button" title="Excluir relatorio" aria-label="Excluir relatorio">${trashIcon()}</button>
+    <button class="primary-btn" id="finishConference" type="button" ${progress.pending ? "disabled title=\"Preencha todas as quantidades fisicas para concluir\"" : ""}>Concluir</button>
   `;
 
   return `
-    ${pageHeader(conf.status, escapeHtml(conf.stockName), `${formatDate(conf.reportDate)} · ${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)} itens contados · ${formatIntegerDisplay(progress.changed)} itens mudaram desde o relatorio anterior.`, actions)}
-    <div class="progress-dock" data-progress-dock>${formatIntegerDisplay(progress.counted)} de ${formatIntegerDisplay(progress.total)} contados</div>
-    <section class="stats-grid grid compact-stats">
+    ${pageHeader(conf.status, escapeHtml(conf.stockName), `${formatDate(conf.reportDate)} · ${formatIntegerDisplay(progress.changed)} itens mudaram desde o relatorio anterior.`, actions, "conference-header")}
+    <section class="stats-grid grid compact-stats conference-stats">
+      ${stat("Contados", `${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)}`, "counted")}
       ${stat("Itens", progress.total, "total")}
       ${stat("Pendentes", progress.pending, "pending")}
       ${stat("Divergentes", progress.divergent, "divergent")}
+      ${stat("Mudancas PDF", progress.changed, "changed")}
     </section>
     <section class="panel">
       <div class="table-tools">
-        <input class="search" id="searchInput" value="${escapeHtml(state.query)}" placeholder="Buscar por ID ou produto" />
         <div class="segmented" role="tablist">
           ${filterButton("todos", "Todos")}
           ${filterButton("divergentes", "Divergentes")}
@@ -357,17 +507,29 @@ function renderConference(conf) {
         </div>
       </div>
       <div class="table-wrap">
-        <table>
+        <table class="conference-table">
+          <colgroup>
+            <col class="col-id" />
+            <col class="col-product" />
+            <col class="col-number" />
+            <col class="col-number" />
+            <col class="col-input" />
+            <col class="col-diff" />
+            <col class="col-status" />
+            <col class="col-change" />
+            <col class="col-action" />
+            <col class="col-note" />
+          </colgroup>
           <thead>
             <tr>
               <th>ID</th>
               <th>Produto</th>
               <th>Reservados</th>
-              <th>Quantidade</th>
+              <th>Quantidade PDF</th>
               <th>Qtd fisica</th>
-              <th>Diferenca</th>
+              <th>Diferenca fisica</th>
               <th>Status</th>
-              <th>Alteracao relatorio</th>
+              <th>Mudanca no PDF</th>
               <th>Acao</th>
               <th>Observacao</th>
             </tr>
@@ -387,16 +549,14 @@ function filterButton(filter, label) {
 }
 
 function filteredRows(conf) {
-  const query = state.query.trim().toLowerCase();
   return conf.rows.filter((row) => {
     const diff = getDiff(row);
-    const matchQuery = !query || row.id.toLowerCase().includes(query) || row.produto.toLowerCase().includes(query);
     const matchFilter =
       state.filter === "todos" ||
       (state.filter === "divergentes" && diff !== null && diff !== 0) ||
       (state.filter === "alterados" && row.movement !== "same") ||
       (state.filter === "pendentes" && diff === null);
-    return matchQuery && matchFilter;
+    return matchFilter;
   });
 }
 
@@ -420,17 +580,17 @@ function tableRow(conf, row) {
       <td><div class="product-name">${escapeHtml(row.produto)}</div></td>
       <td class="mono">${formatIntegerDisplay(row.reservados)}</td>
       <td class="mono">${quantityDisplay}</td>
-      <td><input class="table-input qty-input" inputmode="numeric" data-edit="${conf.id}:${row.id}:fisica" value="${escapeHtml(row.fisica)}" /></td>
+      <td><input class="table-input qty-input" inputmode="numeric" data-edit="${conf.id}:${row.id}:fisica" value="${escapeHtml(row.fisica)}" placeholder="Contar" /></td>
       <td class="delta ${diff > 0 ? "amber" : diff < 0 ? "red" : diff === 0 ? "green" : ""}" data-diff="${conf.id}:${escapeHtml(row.id)}">${diff === null ? "-" : signed(diff)}</td>
       <td data-status="${conf.id}:${escapeHtml(row.id)}"><span class="badge ${status.color}">${status.label}</span></td>
       <td><span class="badge movement ${movementColor}">${movementLabel}</span></td>
       <td>
         <div class="action-cell">
           <span class="badge ${actionColor}">${actionLabel}</span>
-          <button class="link-btn" data-history="${conf.id}:${escapeHtml(row.id)}" type="button">Historico</button>
+          <button class="link-btn" data-history="${conf.id}:${escapeHtml(row.id)}" type="button" title="Ver historico do produto">Hist.</button>
         </div>
       </td>
-      <td><input class="table-input" data-edit="${conf.id}:${row.id}:observacao" value="${escapeHtml(row.observacao)}" placeholder="Opcional" /></td>
+      <td><input class="table-input" data-edit="${conf.id}:${row.id}:observacao" value="${escapeHtml(row.observacao)}" placeholder="Motivo ou ajuste" /></td>
     </tr>
   `;
 }
@@ -472,8 +632,8 @@ function renderProductHistory(conf) {
   `;
 }
 
-function emptyState(title, text) {
-  return `<div class="empty"><strong>${title}</strong>${text}</div>`;
+function emptyState(title, text, action = "") {
+  return `<div class="empty"><strong>${title}</strong><p>${text}</p>${action}</div>`;
 }
 
 function bindEvents() {
@@ -489,6 +649,32 @@ function bindEvents() {
       render();
     });
   });
+  document.querySelectorAll(".stock-row[data-stock]").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("button")) return;
+      state.activeStockName = row.dataset.stock;
+      render();
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      state.activeStockName = row.dataset.stock;
+      render();
+    });
+  });
+  document.querySelectorAll("[data-delete-stock]").forEach((button) => {
+    button.addEventListener("click", () => deleteStock(button.dataset.deleteStock));
+  });
+  document.querySelectorAll("[data-delete-conference]").forEach((button) => {
+    button.addEventListener("click", () => deleteConference(button.dataset.deleteConference));
+  });
+  const stockSelect = document.getElementById("stockSelect");
+  if (stockSelect) {
+    stockSelect.addEventListener("change", () => {
+      state.activeStockName = stockSelect.value;
+      render();
+    });
+  }
   document.querySelectorAll("[data-history]").forEach((button) => {
     button.addEventListener("click", () => {
       state.activeProductHistory = state.activeProductHistory === button.dataset.history ? null : button.dataset.history;
@@ -500,29 +686,66 @@ function bindEvents() {
     input.addEventListener("keydown", moveOnEnter);
   });
 
-  const searchInput = document.getElementById("searchInput");
-  if (searchInput) {
-    searchInput.addEventListener("input", (event) => {
-      state.query = event.target.value;
+  const savePendingConference = document.getElementById("savePendingConference");
+  if (savePendingConference) {
+    savePendingConference.addEventListener("click", () => {
+      const conf = activeConference();
+      conf.status = "Pendente";
+      saveData();
+      showToast("Conferencia salva como pendente.");
       render();
     });
-    searchInput.focus();
-    searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
   }
 
   const finishConference = document.getElementById("finishConference");
   if (finishConference) {
     finishConference.addEventListener("click", () => {
       const conf = activeConference();
-      conf.status = getProgress(conf).pending === 0 ? "Concluida" : "Pendente";
+      if (getProgress(conf).pending > 0) {
+        showToast("Preencha todas as quantidades fisicas antes de concluir.");
+        return;
+      }
+      conf.status = "Concluida";
       saveData();
-      showToast(conf.status === "Concluida" ? "Conferencia concluida." : "Conferencia salva como pendente.");
+      showToast("Conferencia concluida.");
       render();
     });
   }
 
   bindBackupEvents();
   bindImportEvents();
+}
+
+function deleteConference(id) {
+  const conference = state.data.conferences.find((item) => item.id === id);
+  if (!conference) return;
+  const confirmed = window.confirm(`Excluir o relatorio de ${conference.stockName} em ${formatDate(conference.reportDate)}?`);
+  if (!confirmed) return;
+
+  state.data.conferences = state.data.conferences.filter((item) => item.id !== id);
+  if (state.activeConferenceId === id) state.activeConferenceId = null;
+  saveData();
+  showToast("Relatorio excluido.");
+
+  if (state.page === "conference") navigateToPage("history");
+  else render();
+}
+
+function deleteStock(stockName) {
+  const total = state.data.conferences.filter((item) => item.stockName === stockName).length;
+  if (!total) return;
+  const confirmed = window.confirm(`Excluir o estoque "${stockName}" e seus ${total} relatorios?`);
+  if (!confirmed) return;
+
+  state.data.conferences = state.data.conferences.filter((item) => item.stockName !== stockName);
+  if (state.activeStockName === stockName) state.activeStockName = "";
+  const active = state.data.conferences.find((item) => item.id === state.activeConferenceId);
+  if (!active) state.activeConferenceId = null;
+  saveData();
+  showToast("Estoque excluido.");
+
+  if (state.page === "conference") navigateToPage("stocks");
+  else render();
 }
 
 function bindBackupEvents() {
@@ -593,19 +816,25 @@ function updateLiveRow(conf, row) {
 function updateLiveBadges(conf) {
   const progress = getProgress(conf);
   const subtitle = document.querySelector(".page-subtitle");
-  if (subtitle) subtitle.textContent = `${formatDate(conf.reportDate)} · ${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)} itens contados · ${formatIntegerDisplay(progress.changed)} itens mudaram desde o relatorio anterior.`;
-  const progressDock = document.querySelector("[data-progress-dock]");
-  if (progressDock) progressDock.textContent = `${formatIntegerDisplay(progress.counted)} de ${formatIntegerDisplay(progress.total)} contados`;
+  if (subtitle) subtitle.textContent = `${formatDate(conf.reportDate)} · ${formatIntegerDisplay(progress.changed)} itens mudaram desde o relatorio anterior.`;
   const eyebrow = document.querySelector(".eyebrow");
   if (eyebrow) eyebrow.textContent = conf.status;
   const finishButton = document.getElementById("finishConference");
-  if (finishButton) finishButton.textContent = progress.pending ? "Marcar pendente" : "Concluir";
+  if (finishButton) {
+    finishButton.textContent = "Concluir";
+    finishButton.disabled = progress.pending > 0;
+    finishButton.title = progress.pending > 0 ? "Preencha todas as quantidades fisicas para concluir" : "";
+  }
   const totalStat = document.querySelector('[data-stat="total"]');
+  const countedStat = document.querySelector('[data-stat="counted"]');
   const pendingStat = document.querySelector('[data-stat="pending"]');
   const divergentStat = document.querySelector('[data-stat="divergent"]');
+  const changedStat = document.querySelector('[data-stat="changed"]');
+  if (countedStat) countedStat.textContent = `${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)}`;
   if (totalStat) totalStat.textContent = formatIntegerDisplay(progress.total);
   if (pendingStat) pendingStat.textContent = formatIntegerDisplay(progress.pending);
   if (divergentStat) divergentStat.textContent = formatIntegerDisplay(progress.divergent);
+  if (changedStat) changedStat.textContent = formatIntegerDisplay(progress.changed);
 }
 
 function moveOnEnter(event) {
@@ -643,10 +872,11 @@ function bindImportEvents() {
     document.getElementById("stockName").value = "2.12 Estoque Material";
     document.getElementById("reportDate").value = new Date().toISOString().slice(0, 10);
     document.getElementById("fileName").value = "05-07-2026 - 2.12 Estoque Material.pdf";
-    document.getElementById("pasteRows").value = seedRows.map((row, index) => {
+    state.importRows = parseRows(seedRows.map((row, index) => {
       const quantity = row.quantidade + [1, 0, -5, 0, 3, 0, 0, -2][index];
       return `${row.id} | ${row.produto} | ${row.reservados} | ${quantity}`;
-    }).join("\n") + "\n1009 | Banco bistro preto | 0 | 24";
+    }).join("\n") + "\n1009 | Banco bistro preto | 0 | 24");
+    setImportPreview(`${state.importRows.length} itens prontos para conferencia.`);
     showToast("Exemplo carregado.");
   });
 
@@ -655,6 +885,7 @@ function bindImportEvents() {
 
 async function handleFile(file) {
   if (!file) return;
+  state.importRows = [];
   document.getElementById("fileName").value = file.name;
   setImportPreview("Lendo PDF...");
   const meta = parseFileMeta(file.name);
@@ -668,16 +899,16 @@ async function handleFile(file) {
     document.getElementById("reportDate").value = pdfMeta.reportDate;
     const rows = parseRows(text);
     if (rows.length) {
-      document.getElementById("pasteRows").value = rows.map(formatImportedRow).join("\n");
-      setImportPreview(`Previa: ${rows.slice(0, 5).map(formatImportedRow).join("\n")}`);
+      state.importRows = rows;
+      setImportPreview(`${rows.length} itens reconhecidos. Confira estoque e data antes de criar a conferencia.`);
       showToast(`${rows.length} itens extraidos do PDF.`);
     } else {
-      setImportPreview(`Nenhum item reconhecido. Amostra lida:\n${text.split("\n").slice(0, 12).join("\n")}`);
-      showToast("PDF lido, mas a tabela nao foi identificada. Cole as linhas no fallback.");
+      setImportPreview("Nenhum item reconhecido neste PDF. Verifique se o arquivo e textual e segue o modelo do relatorio.");
+      showToast("PDF lido, mas a tabela nao foi identificada.");
     }
   } catch (error) {
     setImportPreview(`Falha na leitura automatica: ${error.message || "erro desconhecido"}`);
-    showToast("Nao foi possivel ler o PDF automaticamente. Cole as linhas no fallback.");
+    showToast("Nao foi possivel ler o PDF automaticamente.");
   }
 }
 
@@ -692,20 +923,19 @@ function finishImportFlow() {
   const stockName = document.getElementById("stockName").value.trim();
   const reportDate = document.getElementById("reportDate").value;
   const fileName = document.getElementById("fileName").value || "relatorio.pdf";
-  const rows = parseRows(document.getElementById("pasteRows").value);
+  const rows = state.importRows;
   if (!stockName || !reportDate || !rows.length) {
-    showToast("Informe estoque, data e ao menos uma linha valida.");
+    showToast("Selecione um PDF valido antes de criar a conferencia.");
     return;
   }
 
   const previous = latestByStock(stockName);
   const conference = createConference({ stockName, reportDate, fileName, rows }, previous);
   state.data.conferences.unshift(conference);
-  state.activeConferenceId = conference.id;
-  state.page = "conference";
   saveData();
+  state.importRows = [];
   showToast(previous ? "Relatorio mesclado e comparado ao anterior." : "Primeira conferencia criada.");
-  render();
+  navigateToConference(conference.id);
 }
 
 function renderToast() {
@@ -715,4 +945,10 @@ function renderToast() {
   toast.classList.toggle("show", Boolean(state.toast));
 }
 
-render();
+window.addEventListener("hashchange", applyRouteFromHash);
+
+if (!window.location.hash) {
+  window.history.replaceState(null, "", "#dashboard");
+}
+
+applyRouteFromHash();
