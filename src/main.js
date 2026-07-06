@@ -200,7 +200,6 @@ function render() {
         <nav class="nav" aria-label="Navegacao principal">
           ${navButton("dashboard", "D", "Dashboard")}
           ${navButton("import", "U", "Importar PDF")}
-          ${navButton("history", "H", "Historico")}
           ${navButton("stocks", "E", "Estoques")}
         </nav>
       </aside>
@@ -248,7 +247,11 @@ function renderDashboard() {
   const stocks = new Set(state.data.conferences.map((item) => item.stockName)).size;
   const pending = state.data.conferences.filter((item) => item.status === "Pendente").length;
   const divergent = state.data.conferences.reduce((sum, item) => sum + getProgress(item).divergent, 0);
-  const recent = [...state.data.conferences].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 6);
+  const reports = state.data.conferences.length;
+  const nextConference = [...state.data.conferences]
+    .filter((item) => item.status === "Pendente")
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+  const nextProgress = nextConference ? getProgress(nextConference) : null;
   const actions = `
     <button class="ghost-btn" id="importBackup" type="button">Restaurar dados</button>
     <button class="ghost-btn" id="exportBackup" type="button">Salvar dados</button>
@@ -257,18 +260,29 @@ function renderDashboard() {
   `;
 
   return `
-    ${pageHeader("Painel operacional", "Conferencia de estoque", "Acompanhe pendencias, divergencias e alteracoes recentes por estoque com foco em velocidade de digitacao e rastreabilidade.", actions)}
-    <section class="stats-grid grid">
+    ${pageHeader("Painel operacional", "Conferencia de estoque", "Veja a proxima acao e mantenha a conferencia do estoque em dia.", actions)}
+    <section class="next-action">
+      ${nextConference ? `
+        <div>
+          <span class="eyebrow">Proxima acao</span>
+          <h3>Continuar conferencia pendente</h3>
+          <p>${escapeHtml(nextConference.stockName)} · ${formatDate(nextConference.reportDate)} · ${formatIntegerDisplay(nextProgress.counted)}/${formatIntegerDisplay(nextProgress.total)} itens conferidos</p>
+        </div>
+        <button class="primary-btn" data-open="${nextConference.id}" type="button">Continuar</button>
+      ` : `
+        <div>
+          <span class="eyebrow">Proxima acao</span>
+          <h3>${reports ? "Tudo conferido" : "Comece pela importacao"}</h3>
+          <p>${reports ? "Nao ha conferencias pendentes. Importe o proximo PDF quando houver novo relatorio." : "Importe o primeiro PDF do estoque para iniciar a conferencia."}</p>
+        </div>
+        <button class="primary-btn" data-page="import" type="button">Importar PDF</button>
+      `}
+    </section>
+    <section class="stats-grid grid dashboard-stats">
       ${stat("Estoques ativos", stocks)}
       ${stat("Conferencias pendentes", pending)}
       ${stat("Divergencias abertas", divergent)}
-    </section>
-    <section class="panel">
-      <div class="panel-header">
-        <h3 class="panel-title">Conferencias recentes</h3>
-        <button class="ghost-btn" data-page="history" type="button">Ver historico</button>
-      </div>
-      ${recent.length ? recent.map(historyRow).join("") : emptyState("Nenhuma conferencia", "Para começar, importe o relatório PDF do estoque.", `<button class="primary-btn" data-page="import" type="button">Importar primeiro PDF</button>`)}
+      ${stat("Relatorios", reports)}
     </section>
   `;
 }
@@ -392,34 +406,37 @@ function renderStocks() {
     return acc;
   }, {});
   const stockNames = Object.keys(groups).sort((a, b) => a.localeCompare(b));
-  const selectedStock = stockNames.includes(state.activeStockName) ? state.activeStockName : stockNames[0];
+  const selectedStock = stockNames.includes(state.activeStockName) ? state.activeStockName : "";
   state.activeStockName = selectedStock || "";
   const selectedConferences = selectedStock ? [...groups[selectedStock]].sort((a, b) => new Date(a.reportDate) - new Date(b.reportDate)) : [];
   const latestSelected = selectedConferences.at(-1);
   const selectedMetrics = latestSelected ? getStockMetrics(latestSelected) : null;
   const rows = Object.entries(groups).map(([stock, conferences]) => {
     const ordered = [...conferences].sort((a, b) => new Date(a.reportDate) - new Date(b.reportDate));
+    const stockHistory = [...ordered].reverse();
     const totalChanged = ordered.reduce((sum, item) => sum + getProgress(item).changed, 0);
     const latest = ordered.at(-1);
     const metrics = getStockMetrics(latest);
     return `
-      <article class="history-row stock-row ${stock === selectedStock ? "selected-stock" : ""}" data-stock="${escapeHtml(stock)}" tabindex="0" role="button" aria-label="Selecionar estoque ${escapeHtml(stock)}">
-        <div>
-          <h3>${escapeHtml(stock)}</h3>
-          <p>${formatIntegerDisplay(ordered.length)} conferencias · ultima em ${formatDate(latest.reportDate)} · ${metrics.alignedPercent}% alinhado</p>
-        </div>
-        <div>
-          <span class="badge blue">${formatIntegerDisplay(totalChanged)} alteracoes rastreadas</span>
-          <span class="badge green">${formatIntegerDisplay(metrics.aligned)} alinhados</span>
-          <span class="badge red">${formatIntegerDisplay(metrics.missing)} faltando</span>
-          <span class="badge amber">${formatIntegerDisplay(metrics.surplus)} sobrando</span>
-          <span class="badge ${latest.status === "Pendente" ? "gray" : "green"}">${latest.status}</span>
-        </div>
-        <div class="stock-actions">
-          <button class="ghost-btn" data-open="${latest.id}" type="button">Abrir ultima</button>
-          <button class="icon-btn danger-icon" data-delete-stock="${escapeHtml(stock)}" type="button" title="Excluir estoque" aria-label="Excluir estoque">${trashIcon()}</button>
-        </div>
-      </article>
+      <div class="stock-group ${stock === selectedStock ? "expanded" : ""}" data-stock-group="${escapeHtml(stock)}">
+        <article class="history-row stock-row ${stock === selectedStock ? "selected-stock" : ""}" data-stock="${escapeHtml(stock)}" tabindex="0" role="button" aria-label="Selecionar estoque ${escapeHtml(stock)}">
+          <div>
+            <h3>${escapeHtml(stock)}</h3>
+            <p>${formatIntegerDisplay(ordered.length)} conferencias · ultima em ${formatDate(latest.reportDate)} · ${metrics.alignedPercent}% alinhado</p>
+          </div>
+          <div>
+            <span class="badge blue">${formatIntegerDisplay(totalChanged)} alteracoes rastreadas</span>
+            <span class="badge green">${formatIntegerDisplay(metrics.aligned)} alinhados</span>
+            <span class="badge red">${formatIntegerDisplay(metrics.missing)} faltando</span>
+            <span class="badge amber">${formatIntegerDisplay(metrics.surplus)} sobrando</span>
+            <span class="badge ${latest.status === "Pendente" ? "gray" : "green"}">${latest.status}</span>
+          </div>
+          <div class="stock-actions">
+            <button class="icon-btn danger-icon" data-delete-stock="${escapeHtml(stock)}" type="button" title="Excluir estoque" aria-label="Excluir estoque">${trashIcon()}</button>
+          </div>
+        </article>
+        ${renderStockHistory(stockHistory)}
+      </div>
     `;
   }).join("");
 
@@ -430,6 +447,7 @@ function renderStocks() {
         <div class="field">
           <label for="stockSelect">Estoque</label>
           <select id="stockSelect">
+            <option value="">Selecione um estoque</option>
             ${stockNames.map((stock) => `<option value="${escapeHtml(stock)}" ${stock === selectedStock ? "selected" : ""}>${escapeHtml(stock)}</option>`).join("")}
           </select>
         </div>
@@ -454,6 +472,47 @@ function renderStocks() {
       </section>
     ` : ""}
     <section class="panel">${rows || emptyState("Sem estoques", "Importe relatorios para formar a evolucao por estoque.")}</section>
+  `;
+}
+
+function renderStockHistory(conferences) {
+  return `
+    <div class="stock-history">
+      <div class="stock-history-inner">
+        <div class="stock-history-header">
+          <strong>Historico de relatorios</strong>
+          <span>${formatIntegerDisplay(conferences.length)} registros deste estoque</span>
+        </div>
+        <div class="stock-history-list">
+          ${conferences.map(stockHistoryRow).join("")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function stockHistoryRow(conf) {
+  const progress = getProgress(conf);
+  const metrics = getStockMetrics(conf);
+  return `
+    <article class="stock-history-row">
+      <div>
+        <strong>${formatDate(conf.reportDate)}</strong>
+        <span>${escapeHtml(conf.fileName || "relatorio")}</span>
+      </div>
+      <div class="history-metrics">
+        <span class="badge ${conf.status === "Concluida" ? "green" : "gray"}">${conf.status}</span>
+        <span class="badge blue">${formatIntegerDisplay(progress.counted)} conferidos</span>
+        <span class="badge green">${formatIntegerDisplay(metrics.aligned)} alinhados</span>
+        <span class="badge red">${formatIntegerDisplay(metrics.missing)} faltando</span>
+        <span class="badge amber">${formatIntegerDisplay(metrics.surplus)} sobrando</span>
+        <span class="badge gray">${formatIntegerDisplay(metrics.pending)} pendentes</span>
+      </div>
+      <div class="row-actions">
+        <button class="ghost-btn" data-open="${conf.id}" type="button">Abrir</button>
+        <button class="icon-btn danger-icon" data-delete-conference="${conf.id}" type="button" title="Excluir relatorio" aria-label="Excluir relatorio">${trashIcon()}</button>
+      </div>
+    </article>
   `;
 }
 
@@ -492,7 +551,6 @@ function renderConference(conf) {
     ${pageHeader(conf.status, escapeHtml(conf.stockName), `${formatDate(conf.reportDate)} · ${formatIntegerDisplay(progress.changed)} itens mudaram desde o relatorio anterior.`, actions, "conference-header")}
     <section class="stats-grid grid compact-stats conference-stats">
       ${stat("Contados", `${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)}`, "counted")}
-      ${stat("Itens", progress.total, "total")}
       ${stat("Pendentes", progress.pending, "pending")}
       ${stat("Divergentes", progress.divergent, "divergent")}
       ${stat("Mudancas PDF", progress.changed, "changed")}
@@ -518,7 +576,6 @@ function renderConference(conf) {
             <col class="col-status" />
             <col class="col-change" />
             <col class="col-action" />
-            <col class="col-note" />
           </colgroup>
           <thead>
             <tr>
@@ -531,11 +588,10 @@ function renderConference(conf) {
               <th>Status</th>
               <th>Mudanca no PDF</th>
               <th>Acao</th>
-              <th>Observacao</th>
             </tr>
           </thead>
           <tbody>
-            ${rows.length ? rows.map((row) => tableRow(conf, row)).join("") : `<tr><td colspan="10">${emptyState("Nada para exibir", "Ajuste os filtros ou a busca.")}</td></tr>`}
+            ${rows.length ? rows.map((row) => tableRow(conf, row)).join("") : `<tr><td colspan="9">${emptyState("Nada para exibir", "Ajuste os filtros ou a busca.")}</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -590,7 +646,6 @@ function tableRow(conf, row) {
           <button class="link-btn" data-history="${conf.id}:${escapeHtml(row.id)}" type="button" title="Ver historico do produto">Hist.</button>
         </div>
       </td>
-      <td><input class="table-input" data-edit="${conf.id}:${row.id}:observacao" value="${escapeHtml(row.observacao)}" placeholder="Motivo ou ajuste" /></td>
     </tr>
   `;
 }
@@ -652,14 +707,12 @@ function bindEvents() {
   document.querySelectorAll(".stock-row[data-stock]").forEach((row) => {
     row.addEventListener("click", (event) => {
       if (event.target.closest("button")) return;
-      state.activeStockName = row.dataset.stock;
-      render();
+      toggleStockHistory(row.dataset.stock);
     });
     row.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
-      state.activeStockName = row.dataset.stock;
-      render();
+      toggleStockHistory(row.dataset.stock);
     });
   });
   document.querySelectorAll("[data-delete-stock]").forEach((button) => {
@@ -714,6 +767,27 @@ function bindEvents() {
 
   bindBackupEvents();
   bindImportEvents();
+}
+
+function toggleStockHistory(stockName) {
+  if (state.activeStockName !== stockName) {
+    state.activeStockName = stockName;
+    render();
+    return;
+  }
+
+  const group = document.querySelector(`[data-stock-group="${CSS.escape(stockName)}"]`);
+  if (!group) {
+    state.activeStockName = "";
+    render();
+    return;
+  }
+
+  group.classList.add("closing");
+  setTimeout(() => {
+    state.activeStockName = "";
+    render();
+  }, 220);
 }
 
 function deleteConference(id) {
@@ -825,13 +899,11 @@ function updateLiveBadges(conf) {
     finishButton.disabled = progress.pending > 0;
     finishButton.title = progress.pending > 0 ? "Preencha todas as quantidades fisicas para concluir" : "";
   }
-  const totalStat = document.querySelector('[data-stat="total"]');
   const countedStat = document.querySelector('[data-stat="counted"]');
   const pendingStat = document.querySelector('[data-stat="pending"]');
   const divergentStat = document.querySelector('[data-stat="divergent"]');
   const changedStat = document.querySelector('[data-stat="changed"]');
   if (countedStat) countedStat.textContent = `${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)}`;
-  if (totalStat) totalStat.textContent = formatIntegerDisplay(progress.total);
   if (pendingStat) pendingStat.textContent = formatIntegerDisplay(progress.pending);
   if (divergentStat) divergentStat.textContent = formatIntegerDisplay(progress.divergent);
   if (changedStat) changedStat.textContent = formatIntegerDisplay(progress.changed);
