@@ -735,7 +735,7 @@ function tableRow(conf, row) {
   const diff = getDiff(row);
   const previousQuantity = row.movement === "removed" ? Math.abs(Number(row.changedBy || 0)) : null;
   const quantityDisplay = row.quantidadeExtra !== "" && row.quantidadeExtra !== undefined
-    ? `<div class="qty-stack"><span><b>Metragem:</b> ${formatIntegerDisplay(row.quantidade)}</span><small>Bobinas: ${formatIntegerDisplay(row.quantidadeExtra)}</small></div>`
+    ? `<div class="qty-stack"><span>${formatIntegerDisplay(row.quantidade)}</span><small>Bobinas: ${formatIntegerDisplay(row.quantidadeExtra)}</small></div>`
     : previousQuantity
       ? `<div class="qty-stack"><span>${formatIntegerDisplay(row.quantidade)}</span><small>Antes: ${formatIntegerDisplay(previousQuantity)}</small></div>`
     : formatIntegerDisplay(row.quantidade);
