@@ -60,7 +60,7 @@ function createConference(report, previous) {
   const rows = report.rows.map((row) => {
     const old = previousRows.get(String(row.id));
     const changedBy = old ? Number(row.quantidade) - Number(old.quantidade) : 0;
-    const preservedPhysical = old && old.fisica !== "" && changedBy === 0 ? old.fisica : "";
+    const preservedPhysical = old && old.fisica !== "" ? old.fisica : "";
     const preservedObs = old && old.observacao && changedBy === 0 ? old.observacao : "";
     return normalizeRow({
       ...row,
