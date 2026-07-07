@@ -316,8 +316,8 @@ function renderDashboard() {
     .sort((a, b) => new Date(getReportDateTime(b)) - new Date(getReportDateTime(a)))
     .slice(0, 5);
   const actions = `
-    <button class="ghost-btn" id="importBackup" type="button">Restaurar dados</button>
-    <button class="ghost-btn" id="exportBackup" type="button">Salvar dados</button>
+    <button class="ghost-btn" id="importBackup" type="button">Restaurar backup</button>
+    <button class="ghost-btn" id="exportBackup" type="button">Backup completo</button>
     <button class="primary-btn" data-page="stocks" type="button">Importar relatorio</button>
     <input id="backupInput" type="file" accept="application/json,.json" hidden />
   `;
@@ -674,6 +674,7 @@ function renderConference(conf) {
     </section>
     <section class="panel">
       <div class="table-tools">
+        ${progress.inherited ? `<button class="ghost-btn compact-action" data-confirm-all-inherited="${conf.id}" type="button">Confirmar herdadas</button>` : "<span></span>"}
         <div class="segmented" role="tablist">
           ${filterButton("todos", "Todos")}
           ${filterButton("divergentes", "Divergentes")}
@@ -806,6 +807,9 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-confirm-inherited]").forEach((button) => {
     button.addEventListener("click", () => confirmInheritedPhysical(button.dataset.confirmInherited));
+  });
+  document.querySelectorAll("[data-confirm-all-inherited]").forEach((button) => {
+    button.addEventListener("click", () => confirmAllInheritedPhysical(button.dataset.confirmAllInherited));
   });
   document.querySelectorAll("[data-edit]").forEach((input) => {
     input.addEventListener("input", () => updateCell(input.dataset.edit, input.value));
@@ -966,7 +970,7 @@ function exportDataBackup() {
   const payload = createBackupPayload(state.data);
   const fileName = `conferencia-estoque-backup-${new Date().toISOString().slice(0, 10)}.json`;
   downloadJson(payload, fileName);
-  showToast("Arquivo de dados baixado.");
+  showToast("Backup completo baixado.");
 }
 
 async function importDataBackup(file) {
@@ -1008,6 +1012,21 @@ function confirmInheritedPhysical(key) {
   if (!row || !row.fisicaHerdada) return;
   row.fisicaHerdada = false;
   persistRowReview(conf, row);
+}
+
+function confirmAllInheritedPhysical(conferenceId) {
+  const conf = state.data.conferences.find((item) => item.id === conferenceId);
+  if (!conf) return;
+  const inheritedRows = conf.rows.filter((row) => row.fisicaHerdada);
+  if (!inheritedRows.length) return;
+
+  inheritedRows.forEach((row) => {
+    row.fisicaHerdada = false;
+  });
+  conf.status = canCompleteConference(conf) ? "Concluida" : "Pendente";
+  saveData();
+  showToast(`${formatIntegerDisplay(inheritedRows.length)} quantidade${inheritedRows.length === 1 ? "" : "s"} herdada${inheritedRows.length === 1 ? "" : "s"} confirmada${inheritedRows.length === 1 ? "" : "s"}.`);
+  render();
 }
 
 function persistRowReview(conf, row) {

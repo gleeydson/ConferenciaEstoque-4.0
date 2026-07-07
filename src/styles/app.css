@@ -817,11 +817,18 @@ button:disabled {
 
 .table-tools {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   gap: 12px;
   flex-wrap: wrap;
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
+}
+
+.compact-action {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 .search {
