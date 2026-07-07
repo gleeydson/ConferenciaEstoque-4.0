@@ -62,9 +62,12 @@ function createConference(report, previous) {
     const changedBy = old ? Number(row.quantidade) - Number(old.quantidade) : 0;
     const preservedPhysical = old && old.fisica !== "" ? old.fisica : "";
     const preservedObs = old && old.observacao && changedBy === 0 ? old.observacao : "";
+    const physical = row.fisica === undefined || row.fisica === null || row.fisica === ""
+      ? preservedPhysical
+      : row.fisica;
     return normalizeRow({
       ...row,
-      fisica: row.fisica ?? preservedPhysical,
+      fisica: physical,
       observacao: row.observacao ?? preservedObs,
       changedBy,
       movement: old ? (changedBy === 0 ? "same" : "changed") : "added",
@@ -595,7 +598,7 @@ function renderConference(conf) {
               <th>ID</th>
               <th>Produto</th>
               <th>Reservados</th>
-              <th>Quantidade PDF</th>
+              <th>Quantidade Sistema</th>
               <th>Qtd fisica</th>
               <th>Diferenca fisica</th>
               <th>Status</th>
