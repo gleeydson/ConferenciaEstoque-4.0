@@ -17,7 +17,6 @@ const state = {
   page: "dashboard",
   filter: "todos",
   activeConferenceId: null,
-  activeProductHistory: null,
   activeStockName: "",
   importRows: [],
   importMeta: null,
@@ -62,12 +61,13 @@ function createConference(report, previous) {
     const changedBy = old ? Number(row.quantidade) - Number(old.quantidade) : 0;
     const preservedPhysical = old && old.fisica !== "" ? old.fisica : "";
     const preservedObs = old && old.observacao && changedBy === 0 ? old.observacao : "";
-    const physical = row.fisica === undefined || row.fisica === null || row.fisica === ""
-      ? preservedPhysical
-      : row.fisica;
+    const hasIncomingPhysical = row.fisica !== undefined && row.fisica !== null && row.fisica !== "";
+    const physical = hasIncomingPhysical ? row.fisica : preservedPhysical;
+    const inheritedPhysical = !hasIncomingPhysical && preservedPhysical !== "";
     return normalizeRow({
       ...row,
       fisica: physical,
+      fisicaHerdada: inheritedPhysical,
       observacao: row.observacao ?? preservedObs,
       changedBy,
       movement: old ? (changedBy === 0 ? "same" : "changed") : "added",
@@ -80,6 +80,7 @@ function createConference(report, previous) {
         ...old,
         quantidade: 0,
         fisica: old.fisica ?? "",
+        fisicaHerdada: old.fisica !== "" && old.fisica !== null && old.fisica !== undefined,
         changedBy: -Number(old.quantidade),
         movement: "removed",
         observacao: old.observacao || "Removido no novo relatorio",
@@ -98,7 +99,7 @@ function createConference(report, previous) {
     status: "Pendente",
     rows,
   };
-  conference.status = getProgress(conference).pending === 0 ? "Concluida" : "Pendente";
+  conference.status = canCompleteConference(conference) ? "Concluida" : "Pendente";
   return conference;
 }
 
@@ -127,6 +128,17 @@ function getReportTime(conference) {
   return conference.reportTime || timeFromDateTime(conference.reportDateTime);
 }
 
+function canCompleteConference(conference) {
+  const progress = getProgress(conference);
+  return progress.pending === 0 && progress.inherited === 0;
+}
+
+function completionBlockMessage(progress) {
+  if (progress.inherited > 0) return "Revise as quantidades fisicas herdadas para concluir";
+  if (progress.pending > 0) return "Preencha todas as quantidades fisicas para concluir";
+  return "";
+}
+
 function timeFromDateTime(value) {
   const match = String(value || "").match(/T(\d{2}:\d{2}(?::\d{2})?)/);
   if (!match || match[1] === "00:00:00" || match[1] === "00:00") return "";
@@ -143,15 +155,14 @@ function applyPage(page) {
   render();
 }
 
-function setActiveConference(id) {
-  navigateToConference(id);
+function setActiveConference(id, filter = "todos") {
+  navigateToConference(id, filter);
 }
 
-function applyActiveConference(id) {
+function applyActiveConference(id, filter = "todos") {
   state.activeConferenceId = id;
   state.page = "conference";
-  state.filter = "todos";
-  state.activeProductHistory = null;
+  state.filter = ["todos", "divergentes", "recontar", "pendentes"].includes(filter) ? filter : "todos";
   render();
 }
 
@@ -160,8 +171,9 @@ function navigateToPage(page) {
   setHash(`#${route}`);
 }
 
-function navigateToConference(id) {
-  setHash(`#conferencia/${encodeURIComponent(id)}`);
+function navigateToConference(id, filter = "todos") {
+  const suffix = filter && filter !== "todos" ? `/${encodeURIComponent(filter)}` : "";
+  setHash(`#conferencia/${encodeURIComponent(id)}${suffix}`);
 }
 
 function setHash(hash) {
@@ -174,12 +186,12 @@ function setHash(hash) {
 
 function applyRouteFromHash() {
   const hash = decodeURIComponent(window.location.hash.replace(/^#\/?/, ""));
-  const [route, id] = hash.split("/");
+  const [route, id, filter] = hash.split("/");
 
   if (route === "conferencia" && id) {
     const exists = state.data.conferences.some((item) => item.id === id);
     if (exists) {
-      applyActiveConference(id);
+      applyActiveConference(id, filter);
       return;
     }
   }
@@ -288,14 +300,21 @@ function pageHeader(eyebrow, title, subtitle, actions = "", className = "") {
 }
 
 function renderDashboard() {
-  const stocks = new Set(state.data.conferences.map((item) => item.stockName)).size;
-  const pending = state.data.conferences.filter((item) => item.status === "Pendente").length;
-  const divergent = state.data.conferences.reduce((sum, item) => sum + getProgress(item).divergent, 0);
+  const latestConferences = latestConferencesByStock();
+  const stocks = latestConferences.length;
   const reports = state.data.conferences.length;
-  const nextConference = [...state.data.conferences]
-    .filter((item) => item.status === "Pendente")
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
-  const nextProgress = nextConference ? getProgress(nextConference) : null;
+  const totals = latestConferences.reduce((acc, conf) => {
+    const progress = getProgress(conf);
+    acc.toReview += progress.inherited;
+    acc.toCount += getEmptyCount(conf);
+    acc.divergent += progress.divergent;
+    acc.changed += progress.changed;
+    acc.pendingConferences += conf.status === "Pendente" ? 1 : 0;
+    return acc;
+  }, { toReview: 0, toCount: 0, divergent: 0, changed: 0, pendingConferences: 0 });
+  const recentReports = [...state.data.conferences]
+    .sort((a, b) => new Date(getReportDateTime(b)) - new Date(getReportDateTime(a)))
+    .slice(0, 5);
   const actions = `
     <button class="ghost-btn" id="importBackup" type="button">Restaurar dados</button>
     <button class="ghost-btn" id="exportBackup" type="button">Salvar dados</button>
@@ -304,31 +323,112 @@ function renderDashboard() {
   `;
 
   return `
-    ${pageHeader("Painel operacional", "Conferencia de estoque", "Veja a proxima acao e mantenha a conferencia do estoque em dia.", actions)}
-    <section class="next-action">
-      ${nextConference ? `
-        <div>
-          <span class="eyebrow">Proxima acao</span>
-          <h3>Continuar conferencia pendente</h3>
-          <p>${escapeHtml(nextConference.stockName)} · ${formatReportDateTime(nextConference)} · ${formatIntegerDisplay(nextProgress.counted)}/${formatIntegerDisplay(nextProgress.total)} itens conferidos</p>
-        </div>
-        <button class="primary-btn" data-open="${nextConference.id}" type="button">Continuar</button>
-      ` : `
-        <div>
-          <span class="eyebrow">Proxima acao</span>
-          <h3>${reports ? "Tudo conferido" : "Comece pela importacao"}</h3>
-          <p>${reports ? "Nao ha conferencias pendentes. Importe o proximo PDF quando houver novo relatorio." : "Importe o primeiro PDF do estoque para iniciar a conferencia."}</p>
-        </div>
-        <button class="primary-btn" data-page="stocks" type="button">Importar relatorio</button>
-      `}
-    </section>
+    ${pageHeader("Painel operacional", "Conferencia de estoque", "Acompanhe pendencias, divergencias e o status atual de cada estoque.", actions)}
     <section class="stats-grid grid dashboard-stats">
       ${stat("Estoques ativos", stocks)}
-      ${stat("Conferencias pendentes", pending)}
-      ${stat("Divergencias abertas", divergent)}
-      ${stat("Relatorios", reports)}
+      ${stat("Para revisar", totals.toReview)}
+      ${stat("Para contar", totals.toCount)}
+      ${stat("Divergencias fisicas", totals.divergent)}
+      ${stat("Mudancas sistema", totals.changed)}
+      ${stat("Conferencias pendentes", totals.pendingConferences)}
+    </section>
+    <section class="panel dashboard-panel">
+      <div class="dashboard-section-header">
+        <div>
+          <strong>Status dos estoques</strong>
+          <span>${formatIntegerDisplay(stocks)} estoque${stocks === 1 ? "" : "s"} com relatorio atual</span>
+        </div>
+      </div>
+      <div class="dashboard-stock-list">
+        ${latestConferences.length ? latestConferences
+          .sort((a, b) => getDashboardNeedScore(b) - getDashboardNeedScore(a) || a.stockName.localeCompare(b.stockName))
+          .map(dashboardStockRow)
+          .join("") : emptyState("Nenhum estoque ainda", "Importe um relatorio para acompanhar o status dos estoques.")}
+      </div>
+    </section>
+    <section class="panel dashboard-panel">
+      <div class="dashboard-section-header">
+        <div>
+          <strong>Ultimos relatorios</strong>
+          <span>Importacoes mais recentes</span>
+        </div>
+      </div>
+      <div class="dashboard-report-list">
+        ${recentReports.length ? recentReports.map(dashboardReportRow).join("") : emptyState("Sem relatorios", "Os ultimos relatorios importados aparecerao aqui.")}
+      </div>
     </section>
   `;
+}
+
+function latestConferencesByStock() {
+  const groups = state.data.conferences.reduce((acc, item) => {
+    acc[item.stockName] ||= [];
+    acc[item.stockName].push(item);
+    return acc;
+  }, {});
+  return Object.values(groups).map((items) => [...items]
+    .sort((a, b) => new Date(getReportDateTime(b)) - new Date(getReportDateTime(a)))[0]);
+}
+
+function getEmptyCount(conference) {
+  return conference.rows.filter((row) => getDiff(row) === null).length;
+}
+
+function getDashboardNeedScore(conference) {
+  const progress = getProgress(conference);
+  return (progress.inherited * 1000) + (getEmptyCount(conference) * 800) + (progress.divergent * 500) + (progress.changed * 100);
+}
+
+function dashboardStockRow(conf) {
+  const progress = getProgress(conf);
+  const metrics = getStockMetrics(conf);
+  const empty = getEmptyCount(conf);
+  const filter = progress.inherited || empty ? "pendentes" : progress.divergent ? "divergentes" : progress.changed ? "recontar" : "todos";
+  return `
+    <article class="dashboard-stock-row">
+      <div>
+        <h3>${escapeHtml(conf.stockName)}</h3>
+        <p>${formatReportDateTime(conf)} · ${reportAgeText(conf)}</p>
+      </div>
+      <div class="history-metrics">
+        <span class="badge ${conf.status === "Concluida" ? "green" : "gray"}">${conf.status}</span>
+        <span class="badge gray">${formatIntegerDisplay(progress.inherited)} herdadas</span>
+        <span class="badge gray">${formatIntegerDisplay(empty)} a contar</span>
+        <span class="badge red">${formatIntegerDisplay(progress.divergent)} divergencias</span>
+        <span class="badge blue">${formatIntegerDisplay(progress.changed)} mudancas</span>
+        <span class="badge green">${formatIntegerDisplay(metrics.aligned)} alinhados</span>
+      </div>
+      <button class="ghost-btn" data-open="${conf.id}" data-open-filter="${filter}" type="button">Abrir</button>
+    </article>
+  `;
+}
+
+function dashboardReportRow(conf) {
+  const progress = getProgress(conf);
+  const filter = progress.inherited || getEmptyCount(conf) ? "pendentes" : progress.divergent ? "divergentes" : "todos";
+  return `
+    <article class="dashboard-report-row">
+      <div>
+        <strong>${escapeHtml(conf.stockName)}</strong>
+        <span>${formatReportDateTime(conf)} · ${escapeHtml(conf.fileName || "relatorio")}</span>
+      </div>
+      <div class="history-metrics">
+        <span class="badge ${conf.status === "Concluida" ? "green" : "gray"}">${conf.status}</span>
+        <span class="badge gray">${formatIntegerDisplay(progress.pending)} pendentes</span>
+        <span class="badge red">${formatIntegerDisplay(progress.divergent)} divergencias</span>
+      </div>
+      <button class="ghost-btn" data-open="${conf.id}" data-open-filter="${filter}" type="button">Abrir</button>
+    </article>
+  `;
+}
+
+function reportAgeText(conf) {
+  const date = new Date(getReportDateTime(conf));
+  const now = new Date();
+  const days = Math.max(0, Math.floor((now - date) / 86400000));
+  if (days === 0) return "relatorio de hoje";
+  if (days === 1) return "ha 1 dia";
+  return `ha ${formatIntegerDisplay(days)} dias`;
 }
 
 function stat(label, value, key = "") {
@@ -536,7 +636,7 @@ function getStockMetrics(conference) {
   const total = conference.rows.length || 0;
   const metrics = conference.rows.reduce((acc, row) => {
     const diff = getDiff(row);
-    if (diff === null) acc.pending += 1;
+    if (diff === null || row.fisicaHerdada) acc.pending += 1;
     else if (diff === 0) acc.aligned += 1;
     else if (diff < 0) acc.missing += 1;
     else acc.surplus += 1;
@@ -556,27 +656,28 @@ function renderConference(conf) {
   if (!conf) return renderDashboard();
   const progress = getProgress(conf);
   const rows = filteredRows(conf);
+  const blockMessage = completionBlockMessage(progress);
   const actions = `
     <button class="ghost-btn" data-page="import" type="button">Atualizar com PDF</button>
     <button class="ghost-btn" id="savePendingConference" type="button">Salvar pendente</button>
     <button class="icon-btn danger-icon" data-delete-conference="${conf.id}" type="button" title="Excluir relatorio" aria-label="Excluir relatorio">${trashIcon()}</button>
-    <button class="primary-btn" id="finishConference" type="button" ${progress.pending ? "disabled title=\"Preencha todas as quantidades fisicas para concluir\"" : ""}>Concluir</button>
+    <button class="primary-btn" id="finishConference" type="button" ${blockMessage ? `disabled title="${blockMessage}"` : ""}>Concluir</button>
   `;
 
   return `
-    ${pageHeader(conf.status, escapeHtml(conf.stockName), `${formatReportDateTime(conf)} · ${formatIntegerDisplay(progress.changed)} itens mudaram desde o relatorio anterior.`, actions, "conference-header")}
+    ${pageHeader(conf.status, escapeHtml(conf.stockName), `${formatReportDateTime(conf)} · ${formatIntegerDisplay(progress.changed)} mudancas no sistema desde o relatorio anterior.`, actions, "conference-header")}
     <section class="stats-grid grid compact-stats conference-stats">
       ${stat("Contados", `${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)}`, "counted")}
       ${stat("Pendentes", progress.pending, "pending")}
-      ${stat("Divergentes", progress.divergent, "divergent")}
-      ${stat("Mudancas PDF", progress.changed, "changed")}
+      ${stat("Divergencias fisicas", progress.divergent, "divergent")}
+      ${stat("Mudancas sistema", progress.changed, "changed")}
     </section>
     <section class="panel">
       <div class="table-tools">
         <div class="segmented" role="tablist">
           ${filterButton("todos", "Todos")}
           ${filterButton("divergentes", "Divergentes")}
-          ${filterButton("alterados", "Alterados")}
+          ${filterButton("recontar", "Recontar")}
           ${filterButton("pendentes", "Pendentes")}
         </div>
       </div>
@@ -591,27 +692,24 @@ function renderConference(conf) {
             <col class="col-diff" />
             <col class="col-status" />
             <col class="col-change" />
-            <col class="col-action" />
           </colgroup>
           <thead>
             <tr>
               <th>ID</th>
               <th>Produto</th>
-              <th>Reservados</th>
-              <th>Quantidade Sistema</th>
+              <th>Reserv.</th>
+              <th>Qtd Sistema</th>
               <th>Qtd fisica</th>
-              <th>Diferenca fisica</th>
+              <th>Dif. fisica</th>
               <th>Status</th>
-              <th>Mudanca no PDF</th>
-              <th>Acao</th>
+              <th>Mudanca Sistema</th>
             </tr>
           </thead>
           <tbody>
-            ${rows.length ? rows.map((row) => tableRow(conf, row)).join("") : `<tr><td colspan="9">${emptyState("Nada para exibir", "Ajuste os filtros ou a busca.")}</td></tr>`}
+            ${rows.length ? rows.map((row) => tableRow(conf, row)).join("") : `<tr><td colspan="8">${emptyState("Nada para exibir", "Ajuste os filtros ou a busca.")}</td></tr>`}
           </tbody>
         </table>
       </div>
-      ${renderProductHistory(conf)}
     </section>
   `;
 }
@@ -626,8 +724,8 @@ function filteredRows(conf) {
     const matchFilter =
       state.filter === "todos" ||
       (state.filter === "divergentes" && diff !== null && diff !== 0) ||
-      (state.filter === "alterados" && row.movement !== "same") ||
-      (state.filter === "pendentes" && diff === null);
+      (state.filter === "recontar" && (row.movement !== "same" || row.fisicaHerdada)) ||
+      (state.filter === "pendentes" && (diff === null || row.fisicaHerdada));
     return matchFilter;
   });
 }
@@ -643,63 +741,24 @@ function tableRow(conf, row) {
     : formatIntegerDisplay(row.quantidade);
   const movementLabel = row.movement === "same" ? "Sem alteracao" : row.movement === "added" ? "Adicionado" : row.movement === "removed" ? "Removido" : signed(row.changedBy);
   const movementColor = row.movement === "same" ? "gray" : row.movement === "removed" ? "red" : "blue";
-  const actionLabel = row.movement === "same" ? "Conferir" : row.movement === "removed" ? "Revisar" : "Recontar";
-  const actionColor = row.movement === "same" ? "gray" : "amber";
-  const discreet = row.movement === "same" && state.filter === "todos" && getProgress(conf).changed > 0 ? "discreet" : "";
+  const changed = row.movement === "changed" ? "changed" : "";
+  const inherited = row.fisicaHerdada ? "inherited" : "";
   return `
-    <tr data-row="${conf.id}:${escapeHtml(row.id)}" class="${discreet} ${row.movement === "added" ? "added" : ""} ${row.movement === "removed" ? "removed" : ""}">
+    <tr data-row="${conf.id}:${escapeHtml(row.id)}" class="${changed} ${inherited} ${row.movement === "added" ? "added" : ""} ${row.movement === "removed" ? "removed" : ""}">
       <td class="mono">${escapeHtml(row.id)}</td>
       <td><div class="product-name">${escapeHtml(row.produto)}</div></td>
       <td class="mono">${formatIntegerDisplay(row.reservados)}</td>
       <td class="mono">${quantityDisplay}</td>
-      <td><input class="table-input qty-input" inputmode="numeric" data-edit="${conf.id}:${row.id}:fisica" value="${escapeHtml(row.fisica)}" placeholder="Contar" /></td>
+      <td>
+        <div class="physical-cell">
+          <input class="table-input qty-input ${row.fisicaHerdada ? "inherited-input" : ""}" inputmode="numeric" data-edit="${conf.id}:${row.id}:fisica" value="${escapeHtml(row.fisica)}" placeholder="Contar" />
+          ${row.fisicaHerdada ? `<button class="confirm-inherited" data-confirm-inherited="${conf.id}:${escapeHtml(row.id)}" type="button" title="Confirmar quantidade herdada">OK</button>` : ""}
+        </div>
+      </td>
       <td class="delta ${diff > 0 ? "amber" : diff < 0 ? "red" : diff === 0 ? "green" : ""}" data-diff="${conf.id}:${escapeHtml(row.id)}">${diff === null ? "-" : signed(diff)}</td>
       <td data-status="${conf.id}:${escapeHtml(row.id)}"><span class="badge ${status.color}">${status.label}</span></td>
       <td><span class="badge movement ${movementColor}">${movementLabel}</span></td>
-      <td>
-        <div class="action-cell">
-          <span class="badge ${actionColor}">${actionLabel}</span>
-          <button class="link-btn" data-history="${conf.id}:${escapeHtml(row.id)}" type="button" title="Ver historico do produto">Hist.</button>
-        </div>
-      </td>
     </tr>
-  `;
-}
-
-function renderProductHistory(conf) {
-  if (!state.activeProductHistory) return "";
-  const [conferenceId, rowId] = state.activeProductHistory.split(":");
-  if (conferenceId !== conf.id) return "";
-  const current = conf.rows.find((row) => row.id === rowId);
-  if (!current) return "";
-  const entries = state.data.conferences
-    .filter((item) => item.stockName.toLowerCase() === conf.stockName.toLowerCase())
-    .map((item) => {
-      const row = item.rows.find((candidate) => candidate.id === rowId);
-      if (!row) return null;
-      const diff = getDiff(row);
-      return { conference: item, row, diff };
-    })
-    .filter(Boolean)
-    .sort((a, b) => new Date(getReportDateTime(b.conference)) - new Date(getReportDateTime(a.conference)));
-
-  return `
-    <aside class="history-panel">
-      <div>
-        <strong>${escapeHtml(current.id)} · ${escapeHtml(current.produto)}</strong>
-        <p>Historico de quantidade, divergencias e observacoes neste estoque.</p>
-      </div>
-      <div class="history-timeline">
-        ${entries.map((entry) => `
-          <article>
-            <span>${formatReportDateTime(entry.conference)}</span>
-            <b>${formatIntegerDisplay(entry.row.quantidade)}</b>
-            <em>${entry.diff === null ? "Sem contagem" : entry.diff === 0 ? "Alinhado" : `Divergencia ${signed(entry.diff)}`}</em>
-            ${entry.row.observacao ? `<small>${escapeHtml(entry.row.observacao)}</small>` : ""}
-          </article>
-        `).join("")}
-      </div>
-    </aside>
   `;
 }
 
@@ -712,7 +771,7 @@ function bindEvents() {
     button.addEventListener("click", () => setPage(button.dataset.page));
   });
   document.querySelectorAll("[data-open]").forEach((button) => {
-    button.addEventListener("click", () => setActiveConference(button.dataset.open));
+    button.addEventListener("click", () => setActiveConference(button.dataset.open, button.dataset.openFilter || "todos"));
   });
   document.querySelectorAll("[data-filter]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -745,11 +804,8 @@ function bindEvents() {
     await importStockPdfFiles([...stockPdfInput.files]);
     stockPdfInput.value = "";
   });
-  document.querySelectorAll("[data-history]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.activeProductHistory = state.activeProductHistory === button.dataset.history ? null : button.dataset.history;
-      render();
-    });
+  document.querySelectorAll("[data-confirm-inherited]").forEach((button) => {
+    button.addEventListener("click", () => confirmInheritedPhysical(button.dataset.confirmInherited));
   });
   document.querySelectorAll("[data-edit]").forEach((input) => {
     input.addEventListener("input", () => updateCell(input.dataset.edit, input.value));
@@ -771,7 +827,12 @@ function bindEvents() {
   if (finishConference) {
     finishConference.addEventListener("click", () => {
       const conf = activeConference();
-      if (getProgress(conf).pending > 0) {
+      const progress = getProgress(conf);
+      if (progress.inherited > 0) {
+        showToast("Revise as quantidades fisicas herdadas antes de concluir.");
+        return;
+      }
+      if (progress.pending > 0) {
         showToast("Preencha todas as quantidades fisicas antes de concluir.");
         return;
       }
@@ -936,7 +997,21 @@ function updateCell(key, value) {
   const row = conf?.rows.find((item) => item.id === rowId);
   if (!row) return;
   row[field] = field === "fisica" ? value.replace(/[^\d.-]/g, "") : value;
-  conf.status = getProgress(conf).pending === 0 ? "Concluida" : "Pendente";
+  if (field === "fisica") row.fisicaHerdada = false;
+  persistRowReview(conf, row);
+}
+
+function confirmInheritedPhysical(key) {
+  const [conferenceId, rowId] = key.split(":");
+  const conf = state.data.conferences.find((item) => item.id === conferenceId);
+  const row = conf?.rows.find((item) => item.id === rowId);
+  if (!row || !row.fisicaHerdada) return;
+  row.fisicaHerdada = false;
+  persistRowReview(conf, row);
+}
+
+function persistRowReview(conf, row) {
+  conf.status = canCompleteConference(conf) ? "Concluida" : "Pendente";
   saveData();
   updateLiveRow(conf, row);
   updateLiveBadges(conf);
@@ -944,6 +1019,7 @@ function updateCell(key, value) {
 
 function updateLiveRow(conf, row) {
   const selectorId = CSS.escape(`${conf.id}:${row.id}`);
+  const rowElement = document.querySelector(`[data-row="${selectorId}"]`);
   const diffCell = document.querySelector(`[data-diff="${selectorId}"]`);
   const statusCell = document.querySelector(`[data-status="${selectorId}"]`);
   if (!diffCell || !statusCell) return;
@@ -954,19 +1030,23 @@ function updateLiveRow(conf, row) {
   diffCell.classList.toggle("red", diff < 0);
   diffCell.classList.toggle("green", diff === 0);
   statusCell.innerHTML = `<span class="badge ${status.color}">${status.label}</span>`;
+  rowElement?.classList.toggle("inherited", Boolean(row.fisicaHerdada));
+  rowElement?.querySelector(".confirm-inherited")?.remove();
+  rowElement?.querySelector(".qty-input")?.classList.toggle("inherited-input", Boolean(row.fisicaHerdada));
 }
 
 function updateLiveBadges(conf) {
   const progress = getProgress(conf);
+  const blockMessage = completionBlockMessage(progress);
   const subtitle = document.querySelector(".page-subtitle");
-  if (subtitle) subtitle.textContent = `${formatReportDateTime(conf)} · ${formatIntegerDisplay(progress.changed)} itens mudaram desde o relatorio anterior.`;
+  if (subtitle) subtitle.textContent = `${formatReportDateTime(conf)} · ${formatIntegerDisplay(progress.changed)} mudancas no sistema desde o relatorio anterior.`;
   const eyebrow = document.querySelector(".eyebrow");
   if (eyebrow) eyebrow.textContent = conf.status;
   const finishButton = document.getElementById("finishConference");
   if (finishButton) {
     finishButton.textContent = "Concluir";
-    finishButton.disabled = progress.pending > 0;
-    finishButton.title = progress.pending > 0 ? "Preencha todas as quantidades fisicas para concluir" : "";
+    finishButton.disabled = Boolean(blockMessage);
+    finishButton.title = blockMessage;
   }
   const countedStat = document.querySelector('[data-stat="counted"]');
   const pendingStat = document.querySelector('[data-stat="pending"]');

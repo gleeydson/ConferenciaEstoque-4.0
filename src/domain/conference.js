@@ -8,6 +8,7 @@ export function normalizeRow(row) {
       ? ""
       : numberOrZero(row.quantidadeExtra),
     fisica: row.fisica === undefined || row.fisica === null ? "" : row.fisica,
+    fisicaHerdada: Boolean(row.fisicaHerdada),
     observacao: row.observacao || "",
     changedBy: numberOrZero(row.changedBy),
     movement: row.movement || "same",
@@ -38,7 +39,9 @@ export function getRowStatus(row) {
 }
 
 export function getProgress(conference) {
-  const counted = conference.rows.filter((row) => getDiff(row) !== null).length;
+  const inherited = conference.rows.filter((row) => row.fisicaHerdada).length;
+  const counted = conference.rows.filter((row) => getDiff(row) !== null && !row.fisicaHerdada).length;
+  const empty = conference.rows.filter((row) => getDiff(row) === null).length;
   const divergent = conference.rows.filter((row) => {
     const diff = getDiff(row);
     return diff !== null && diff !== 0;
@@ -47,8 +50,9 @@ export function getProgress(conference) {
   return {
     total: conference.rows.length,
     counted,
-    pending: conference.rows.length - counted,
+    pending: empty + inherited,
     divergent,
     changed,
+    inherited,
   };
 }
