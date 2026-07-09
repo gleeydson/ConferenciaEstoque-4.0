@@ -302,16 +302,16 @@ function pageHeader(eyebrow, title, subtitle, actions = "", className = "") {
 function renderDashboard() {
   const latestConferences = latestConferencesByStock();
   const stocks = latestConferences.length;
-  const reports = state.data.conferences.length;
   const totals = latestConferences.reduce((acc, conf) => {
     const progress = getProgress(conf);
-    acc.toReview += progress.inherited;
+    acc.importedToday += isReportToday(conf) ? 1 : 0;
+    acc.withoutToday += isReportToday(conf) ? 0 : 1;
+    acc.toReview += getReviewCount(conf);
     acc.toCount += getEmptyCount(conf);
     acc.divergent += progress.divergent;
     acc.changed += progress.changed;
-    acc.pendingConferences += conf.status === "Pendente" ? 1 : 0;
     return acc;
-  }, { toReview: 0, toCount: 0, divergent: 0, changed: 0, pendingConferences: 0 });
+  }, { importedToday: 0, withoutToday: 0, toReview: 0, toCount: 0, divergent: 0, changed: 0 });
   const recentReports = [...state.data.conferences]
     .sort((a, b) => new Date(getReportDateTime(b)) - new Date(getReportDateTime(a)))
     .slice(0, 5);
@@ -323,14 +323,14 @@ function renderDashboard() {
   `;
 
   return `
-    ${pageHeader("Painel operacional", "Conferencia de estoque", "Acompanhe pendencias, divergencias e o status atual de cada estoque.", actions)}
+    ${pageHeader("Rotina do dia", "Conferencia de estoque", "Importe os relatorios da manha e resolva primeiro o que mudou, falta contar ou esta com diferenca.", actions)}
     <section class="stats-grid grid dashboard-stats">
-      ${stat("Estoques ativos", stocks)}
+      ${stat("Importados hoje", totals.importedToday)}
+      ${stat("Sem relatorio hoje", totals.withoutToday)}
       ${stat("Para revisar", totals.toReview)}
       ${stat("Para contar", totals.toCount)}
-      ${stat("Divergencias fisicas", totals.divergent)}
-      ${stat("Mudancas sistema", totals.changed)}
-      ${stat("Conferencias pendentes", totals.pendingConferences)}
+      ${stat("Com diferenca", totals.divergent)}
+      ${stat("Mudou no sistema", totals.changed)}
     </section>
     <section class="panel dashboard-panel">
       <div class="dashboard-section-header">
@@ -374,28 +374,68 @@ function getEmptyCount(conference) {
   return conference.rows.filter((row) => getDiff(row) === null).length;
 }
 
+function getReviewCount(conference) {
+  return conference.rows.filter((row) => row.fisicaHerdada || row.movement !== "same").length;
+}
+
+function isReportToday(conference) {
+  return getReportDateTime(conference).slice(0, 10) === todayKey();
+}
+
+function todayKey() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function getDashboardNeedScore(conference) {
   const progress = getProgress(conference);
-  return (progress.inherited * 1000) + (getEmptyCount(conference) * 800) + (progress.divergent * 500) + (progress.changed * 100);
+  return (isReportToday(conference) ? 0 : 5000) + (getReviewCount(conference) * 1000) + (getEmptyCount(conference) * 800) + (progress.divergent * 500);
+}
+
+function getPriorityFilter(conference) {
+  if (getReviewCount(conference)) return "recontar";
+  if (getEmptyCount(conference)) return "pendentes";
+  const progress = getProgress(conference);
+  if (progress.divergent) return "divergentes";
+  return "todos";
+}
+
+function getDailyStockStatus(conference) {
+  if (!isReportToday(conference)) return { label: "Nao importado hoje", color: "amber" };
+  if (getReviewCount(conference)) return { label: "A revisar", color: "blue" };
+  if (getEmptyCount(conference)) return { label: "Sem contagem", color: "gray" };
+  if (getProgress(conference).divergent) return { label: "Com diferenca", color: "red" };
+  return { label: "Concluido", color: "green" };
+}
+
+function getStockTone(stockName) {
+  const names = latestConferencesByStock().map((item) => item.stockName).sort((a, b) => a.localeCompare(b));
+  const index = Math.max(0, names.indexOf(stockName));
+  return `stock-tone-${(index % 4) + 1}`;
 }
 
 function dashboardStockRow(conf) {
   const progress = getProgress(conf);
   const metrics = getStockMetrics(conf);
   const empty = getEmptyCount(conf);
-  const filter = progress.inherited || empty ? "pendentes" : progress.divergent ? "divergentes" : progress.changed ? "recontar" : "todos";
+  const review = getReviewCount(conf);
+  const filter = getPriorityFilter(conf);
+  const dailyStatus = getDailyStockStatus(conf);
   return `
-    <article class="dashboard-stock-row">
+    <article class="dashboard-stock-row stock-tone ${getStockTone(conf.stockName)}">
       <div>
         <h3>${escapeHtml(conf.stockName)}</h3>
         <p>${formatReportDateTime(conf)} · ${reportAgeText(conf)}</p>
       </div>
       <div class="history-metrics">
-        <span class="badge ${conf.status === "Concluida" ? "green" : "gray"}">${conf.status}</span>
-        <span class="badge gray">${formatIntegerDisplay(progress.inherited)} herdadas</span>
+        <span class="badge ${dailyStatus.color}">${dailyStatus.label}</span>
+        <span class="badge blue">${formatIntegerDisplay(review)} revisar</span>
         <span class="badge gray">${formatIntegerDisplay(empty)} a contar</span>
-        <span class="badge red">${formatIntegerDisplay(progress.divergent)} divergencias</span>
-        <span class="badge blue">${formatIntegerDisplay(progress.changed)} mudancas</span>
+        <span class="badge red">${formatIntegerDisplay(progress.divergent)} com diferenca</span>
+        <span class="badge blue">${formatIntegerDisplay(progress.changed)} mudou sistema</span>
         <span class="badge green">${formatIntegerDisplay(metrics.aligned)} alinhados</span>
       </div>
       <button class="ghost-btn" data-open="${conf.id}" data-open-filter="${filter}" type="button">Abrir</button>
@@ -405,7 +445,8 @@ function dashboardStockRow(conf) {
 
 function dashboardReportRow(conf) {
   const progress = getProgress(conf);
-  const filter = progress.inherited || getEmptyCount(conf) ? "pendentes" : progress.divergent ? "divergentes" : "todos";
+  const filter = getPriorityFilter(conf);
+  const review = getReviewCount(conf);
   return `
     <article class="dashboard-report-row">
       <div>
@@ -414,8 +455,9 @@ function dashboardReportRow(conf) {
       </div>
       <div class="history-metrics">
         <span class="badge ${conf.status === "Concluida" ? "green" : "gray"}">${conf.status}</span>
-        <span class="badge gray">${formatIntegerDisplay(progress.pending)} pendentes</span>
-        <span class="badge red">${formatIntegerDisplay(progress.divergent)} divergencias</span>
+        <span class="badge blue">${formatIntegerDisplay(review)} revisar</span>
+        <span class="badge gray">${formatIntegerDisplay(getEmptyCount(conf))} sem contagem</span>
+        <span class="badge red">${formatIntegerDisplay(progress.divergent)} com diferenca</span>
       </div>
       <button class="ghost-btn" data-open="${conf.id}" data-open-filter="${filter}" type="button">Abrir</button>
     </article>
@@ -552,14 +594,15 @@ function renderStocks() {
   const stockNames = Object.keys(groups).sort((a, b) => a.localeCompare(b));
   const selectedStock = stockNames.includes(state.activeStockName) ? state.activeStockName : "";
   state.activeStockName = selectedStock || "";
-  const rows = Object.entries(groups).map(([stock, conferences]) => {
+  const rows = stockNames.map((stock, index) => {
+    const conferences = groups[stock];
     const ordered = [...conferences].sort((a, b) => new Date(getReportDateTime(a)) - new Date(getReportDateTime(b)));
     const stockHistory = [...ordered].reverse();
     const totalChanged = ordered.reduce((sum, item) => sum + getProgress(item).changed, 0);
     const latest = ordered.at(-1);
     const metrics = getStockMetrics(latest);
     return `
-      <div class="stock-group ${stock === selectedStock ? "expanded" : ""}" data-stock-group="${escapeHtml(stock)}">
+      <div class="stock-group stock-tone stock-tone-${(index % 4) + 1} ${stock === selectedStock ? "expanded" : ""}" data-stock-group="${escapeHtml(stock)}">
         <article class="history-row stock-row ${stock === selectedStock ? "selected-stock" : ""}" data-stock="${escapeHtml(stock)}" tabindex="0" role="button" aria-label="Selecionar estoque ${escapeHtml(stock)}">
           <div>
             <h3>${escapeHtml(stock)}</h3>
@@ -655,6 +698,7 @@ function getStockMetrics(conference) {
 function renderConference(conf) {
   if (!conf) return renderDashboard();
   const progress = getProgress(conf);
+  const review = getReviewCount(conf);
   const rows = filteredRows(conf);
   const blockMessage = completionBlockMessage(progress);
   const actions = `
@@ -668,18 +712,18 @@ function renderConference(conf) {
     ${pageHeader(conf.status, escapeHtml(conf.stockName), `${formatReportDateTime(conf)} · ${formatIntegerDisplay(progress.changed)} mudancas no sistema desde o relatorio anterior.`, actions, "conference-header")}
     <section class="stats-grid grid compact-stats conference-stats">
       ${stat("Contados", `${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)}`, "counted")}
-      ${stat("Pendentes", progress.pending, "pending")}
-      ${stat("Divergencias fisicas", progress.divergent, "divergent")}
-      ${stat("Mudancas sistema", progress.changed, "changed")}
+      ${stat("A revisar", review, "review")}
+      ${stat("Com diferenca", progress.divergent, "divergent")}
+      ${stat("Sem contagem", getEmptyCount(conf), "empty")}
     </section>
     <section class="panel">
       <div class="table-tools">
         ${progress.inherited ? `<button class="ghost-btn compact-action" data-confirm-all-inherited="${conf.id}" type="button">Confirmar herdadas</button>` : "<span></span>"}
         <div class="segmented" role="tablist">
           ${filterButton("todos", "Todos")}
-          ${filterButton("divergentes", "Divergentes")}
-          ${filterButton("recontar", "Recontar")}
-          ${filterButton("pendentes", "Pendentes")}
+          ${filterButton("recontar", "Revisar")}
+          ${filterButton("divergentes", "Com diferenca")}
+          ${filterButton("pendentes", "Sem contagem")}
         </div>
       </div>
       <div class="table-wrap">
@@ -703,7 +747,7 @@ function renderConference(conf) {
               <th>Qtd fisica</th>
               <th>Dif. fisica</th>
               <th>Status</th>
-              <th>Mudanca Sistema</th>
+              <th>Mudou Sistema</th>
             </tr>
           </thead>
           <tbody>
@@ -726,7 +770,7 @@ function filteredRows(conf) {
       state.filter === "todos" ||
       (state.filter === "divergentes" && diff !== null && diff !== 0) ||
       (state.filter === "recontar" && (row.movement !== "same" || row.fisicaHerdada)) ||
-      (state.filter === "pendentes" && (diff === null || row.fisicaHerdada));
+      (state.filter === "pendentes" && diff === null);
     return matchFilter;
   });
 }
@@ -1068,13 +1112,13 @@ function updateLiveBadges(conf) {
     finishButton.title = blockMessage;
   }
   const countedStat = document.querySelector('[data-stat="counted"]');
-  const pendingStat = document.querySelector('[data-stat="pending"]');
+  const reviewStat = document.querySelector('[data-stat="review"]');
   const divergentStat = document.querySelector('[data-stat="divergent"]');
-  const changedStat = document.querySelector('[data-stat="changed"]');
+  const emptyStat = document.querySelector('[data-stat="empty"]');
   if (countedStat) countedStat.textContent = `${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)}`;
-  if (pendingStat) pendingStat.textContent = formatIntegerDisplay(progress.pending);
+  if (reviewStat) reviewStat.textContent = formatIntegerDisplay(getReviewCount(conf));
   if (divergentStat) divergentStat.textContent = formatIntegerDisplay(progress.divergent);
-  if (changedStat) changedStat.textContent = formatIntegerDisplay(progress.changed);
+  if (emptyStat) emptyStat.textContent = formatIntegerDisplay(getEmptyCount(conf));
 }
 
 function moveOnEnter(event) {
@@ -1186,7 +1230,7 @@ function finishImportFlow() {
   state.importRows = [];
   state.importMeta = null;
   showToast(previous ? "Relatorio mesclado e comparado ao anterior." : "Primeira conferencia criada.");
-  navigateToConference(conference.id);
+  navigateToConference(conference.id, getPriorityFilter(conference));
 }
 
 function renderToast() {

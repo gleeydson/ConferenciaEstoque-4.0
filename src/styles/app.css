@@ -348,8 +348,39 @@ button:disabled {
   border-bottom: 1px solid rgba(216, 224, 220, .8);
 }
 
+.stock-tone {
+  --stock-accent: var(--line-strong);
+  --stock-bg: var(--surface);
+  --stock-bg-hover: #f7fbfa;
+}
+
+.stock-tone-1 {
+  --stock-accent: #2563a6;
+  --stock-bg: rgba(226, 239, 255, .46);
+  --stock-bg-hover: rgba(226, 239, 255, .7);
+}
+
+.stock-tone-2 {
+  --stock-accent: #138a55;
+  --stock-bg: rgba(221, 246, 233, .46);
+  --stock-bg-hover: rgba(221, 246, 233, .72);
+}
+
+.stock-tone-3 {
+  --stock-accent: #b86b00;
+  --stock-bg: rgba(255, 241, 214, .5);
+  --stock-bg-hover: rgba(255, 241, 214, .76);
+}
+
+.stock-tone-4 {
+  --stock-accent: #6d4cc2;
+  --stock-bg: rgba(238, 232, 255, .5);
+  --stock-bg-hover: rgba(238, 232, 255, .76);
+}
+
 .dashboard-stock-row {
   grid-template-columns: minmax(220px, .9fr) minmax(360px, 1.4fr) auto;
+  background: linear-gradient(90deg, var(--stock-accent) 0 4px, var(--stock-bg) 4px 100%);
 }
 
 .dashboard-report-row {
@@ -364,6 +395,10 @@ button:disabled {
 .dashboard-stock-row:hover,
 .dashboard-report-row:hover {
   background: #f7fbfa;
+}
+
+.dashboard-stock-row:hover {
+  background: linear-gradient(90deg, var(--stock-accent) 0 4px, var(--stock-bg-hover) 4px 100%);
 }
 
 .dashboard-stock-row h3 {
@@ -464,8 +499,8 @@ button:disabled {
 }
 
 .history-row.selected-stock {
-  background: #f7fbfa;
-  box-shadow: inset 4px 0 0 var(--text);
+  background: var(--stock-bg-hover);
+  box-shadow: inset 4px 0 0 var(--stock-accent);
 }
 
 .stock-row {
@@ -487,6 +522,16 @@ button:disabled {
 
 .stock-group > .history-row {
   border-bottom: 0;
+  background: linear-gradient(90deg, var(--stock-accent) 0 4px, var(--stock-bg) 4px 100%);
+}
+
+.stock-group > .history-row.selected-stock {
+  background: linear-gradient(90deg, var(--stock-accent) 0 4px, var(--stock-bg-hover) 4px 100%);
+  box-shadow: inset 4px 0 0 var(--stock-accent);
+}
+
+.stock-group > .history-row:hover {
+  background: linear-gradient(90deg, var(--stock-accent) 0 4px, var(--stock-bg-hover) 4px 100%);
 }
 
 .stock-history {
@@ -1065,7 +1110,7 @@ tbody tr.removed:focus-within { box-shadow: inset 4px 0 0 var(--red); }
 }
 
 .history-row:last-child { border-bottom: 0; }
-.history-row:hover { background: rgba(255,250,240,.86); }
+.history-row:hover { background: #f7fbfa; }
 .history-row h3 { margin: 0 0 4px; font-size: 14px; }
 .history-row p { margin: 0; color: var(--muted); font-size: 12px; }
 
