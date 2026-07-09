@@ -16,6 +16,8 @@ const seedRows = [
 const state = {
   page: "dashboard",
   filter: "todos",
+  search: "",
+  sidebarCollapsed: false,
   activeConferenceId: null,
   activeStockName: "",
   importRows: [],
@@ -152,6 +154,7 @@ function setPage(page) {
 function applyPage(page) {
   state.page = page;
   state.filter = "todos";
+  state.search = "";
   render();
 }
 
@@ -163,6 +166,7 @@ function applyActiveConference(id, filter = "todos") {
   state.activeConferenceId = id;
   state.page = "conference";
   state.filter = ["todos", "divergentes", "recontar", "pendentes"].includes(filter) ? filter : "todos";
+  state.search = "";
   render();
 }
 
@@ -247,8 +251,9 @@ function activeConference() {
 
 function render() {
   document.getElementById("app").innerHTML = `
-    <div class="app-shell">
+    <div class="app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""}">
       <aside class="sidebar">
+        <button class="sidebar-toggle" id="sidebarToggle" type="button" title="${state.sidebarCollapsed ? "Expandir menu" : "Recolher menu"}" aria-label="${state.sidebarCollapsed ? "Expandir menu" : "Recolher menu"}">${state.sidebarCollapsed ? ">" : "<"}</button>
         <div class="brand">
           <div class="brand-mark">C</div>
           <h1>Conferencia<br>Estoque 4.0</h1>
@@ -597,39 +602,39 @@ function renderStocks() {
   const rows = stockNames.map((stock, index) => {
     const conferences = groups[stock];
     const ordered = [...conferences].sort((a, b) => new Date(getReportDateTime(a)) - new Date(getReportDateTime(b)));
-    const stockHistory = [...ordered].reverse();
-    const totalChanged = ordered.reduce((sum, item) => sum + getProgress(item).changed, 0);
     const latest = ordered.at(-1);
+    const latestChanged = getProgress(latest).changed;
     const metrics = getStockMetrics(latest);
     return `
       <div class="stock-group stock-tone stock-tone-${(index % 4) + 1} ${stock === selectedStock ? "expanded" : ""}" data-stock-group="${escapeHtml(stock)}">
-        <article class="history-row stock-row ${stock === selectedStock ? "selected-stock" : ""}" data-stock="${escapeHtml(stock)}" tabindex="0" role="button" aria-label="Selecionar estoque ${escapeHtml(stock)}">
+        <article class="history-row stock-row ${stock === selectedStock ? "selected-stock" : ""}" data-stock="${escapeHtml(stock)}" data-open="${latest.id}" data-open-filter="${getPriorityFilter(latest)}" tabindex="0" role="button" aria-label="Abrir estoque ${escapeHtml(stock)}">
           <div>
             <h3>${escapeHtml(stock)}</h3>
             <p>${formatIntegerDisplay(ordered.length)} conferencias · ultima em ${formatReportDateTime(latest)} · ${metrics.alignedPercent}% alinhado</p>
           </div>
           <div>
-            <span class="badge blue">${formatIntegerDisplay(totalChanged)} alteracoes rastreadas</span>
+            <span class="badge blue">${formatIntegerDisplay(latestChanged)} itens mudaram</span>
             <span class="badge green">${formatIntegerDisplay(metrics.aligned)} alinhados</span>
             <span class="badge red">${formatIntegerDisplay(metrics.missing)} faltando</span>
             <span class="badge amber">${formatIntegerDisplay(metrics.surplus)} sobrando</span>
             <span class="badge ${latest.status === "Pendente" ? "gray" : "green"}">${latest.status}</span>
           </div>
           <div class="stock-actions">
+            <button class="ghost-btn compact-action" data-stock-history="${escapeHtml(stock)}" type="button">Historico</button>
             <button class="icon-btn danger-icon" data-delete-stock="${escapeHtml(stock)}" type="button" title="Excluir estoque" aria-label="Excluir estoque">${trashIcon()}</button>
           </div>
         </article>
-        ${renderStockHistory(stockHistory)}
+        ${stock === selectedStock ? renderStockHistory([...ordered].reverse()) : ""}
       </div>
     `;
   }).join("");
   const actions = `
-    <button class="primary-btn" id="stockImportButton" type="button">${stockNames.length ? "Novo relatorio" : "Importar relatorio"}</button>
+    <button class="primary-btn" id="stockImportButton" type="button">${stockNames.length ? "Importar relatorio(s)" : "Importar relatorio"}</button>
     <input id="stockPdfInput" type="file" accept="application/pdf,.pdf" multiple hidden />
   `;
 
   return `
-    ${pageHeader("Analise por estoque", "Resumo por estoque", "Veja alinhados, faltando, sobrando, pendentes e a trilha de mudancas de cada estoque.", actions)}
+    ${pageHeader("Analise por estoque", "Resumo por estoque", "Cada estoque mostra o relatorio atual. Use Historico apenas para consultar relatorios anteriores.", actions)}
     <section class="panel">${rows || emptyState("Nenhum estoque ainda", "Os estoques aparecem automaticamente depois que voce importa um ou mais relatorios PDF.", `<button class="primary-btn" id="emptyStockImportButton" type="button">Importar relatorio</button>`)}</section>
   `;
 }
@@ -701,29 +706,21 @@ function renderConference(conf) {
   const review = getReviewCount(conf);
   const rows = filteredRows(conf);
   const blockMessage = completionBlockMessage(progress);
-  const actions = `
-    <button class="ghost-btn" data-page="import" type="button">Atualizar com PDF</button>
-    <button class="ghost-btn" id="savePendingConference" type="button">Salvar pendente</button>
-    <button class="icon-btn danger-icon" data-delete-conference="${conf.id}" type="button" title="Excluir relatorio" aria-label="Excluir relatorio">${trashIcon()}</button>
-    <button class="primary-btn" id="finishConference" type="button" ${blockMessage ? `disabled title="${blockMessage}"` : ""}>Concluir</button>
-  `;
+  const empty = getEmptyCount(conf);
 
   return `
-    ${pageHeader(conf.status, escapeHtml(conf.stockName), `${formatReportDateTime(conf)} · ${formatIntegerDisplay(progress.changed)} mudancas no sistema desde o relatorio anterior.`, actions, "conference-header")}
-    <section class="stats-grid grid compact-stats conference-stats">
-      ${stat("Contados", `${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)}`, "counted")}
-      ${stat("A revisar", review, "review")}
-      ${stat("Com diferenca", progress.divergent, "divergent")}
-      ${stat("Sem contagem", getEmptyCount(conf), "empty")}
-    </section>
-    <section class="panel">
-      <div class="table-tools">
-        ${progress.inherited ? `<button class="ghost-btn compact-action" data-confirm-all-inherited="${conf.id}" type="button">Confirmar herdadas</button>` : "<span></span>"}
-        <div class="segmented" role="tablist">
-          ${filterButton("todos", "Todos")}
-          ${filterButton("recontar", "Revisar")}
-          ${filterButton("divergentes", "Com diferenca")}
-          ${filterButton("pendentes", "Sem contagem")}
+    ${renderConferenceHeader(conf, blockMessage)}
+    ${renderProgressPanel(conf, { progress, review, empty })}
+    <section class="panel conference-panel">
+      <div class="table-tools conference-tools">
+        <div class="table-tools-left">
+          ${progress.inherited ? `<button class="ghost-btn compact-action" data-confirm-all-inherited="${conf.id}" type="button">Confirmar herdadas</button>` : ""}
+        </div>
+        <div class="table-tools-right">
+          <label class="search-field">
+            <span>Buscar</span>
+            <input id="conferenceSearch" value="${escapeHtml(state.search)}" placeholder="Buscar por ID ou produto..." />
+          </label>
         </div>
       </div>
       <div class="table-wrap">
@@ -756,14 +753,70 @@ function renderConference(conf) {
         </table>
       </div>
     </section>
+    ${renderConferenceFooter(conf, blockMessage)}
   `;
 }
 
-function filterButton(filter, label) {
-  return `<button class="${state.filter === filter ? "active" : ""}" data-filter="${filter}" type="button">${label}</button>`;
+function renderConferenceHeader(conf, blockMessage) {
+  const progress = getProgress(conf);
+  const isCompleted = conf.status === "Concluida";
+  return `
+    <header class="conference-compact-header">
+      <div class="conference-title-row">
+        <span class="badge ${conf.status === "Concluida" ? "green" : "amber"}">${conf.status}</span>
+        <h2>${escapeHtml(conf.stockName)}</h2>
+        <span class="conference-meta">${formatReportDateTime(conf)} · ${formatIntegerDisplay(progress.changed)} mudancas desde o ultimo relatorio</span>
+      </div>
+      <div class="actions conference-actions">
+        <button class="ghost-btn" id="conferenceImportButton" type="button">Importar novo relatorio</button>
+        <input id="conferencePdfInput" type="file" accept="application/pdf,.pdf" hidden />
+        ${isCompleted ? "" : `<button class="ghost-btn" id="savePendingConference" type="button">Salvar</button>`}
+        <button class="icon-btn danger-icon" data-delete-conference="${conf.id}" type="button" title="Excluir relatorio" aria-label="Excluir relatorio">${trashIcon()}</button>
+        ${isCompleted ? "" : `<button class="primary-btn" id="finishConference" type="button" ${blockMessage ? `disabled title="${blockMessage}"` : ""}>Concluir</button>`}
+      </div>
+    </header>
+  `;
+}
+
+function renderProgressPanel(conf, metrics) {
+  const { progress, review, empty } = metrics;
+  return `
+    <section class="conference-progress panel">
+      <div class="progress-filters" role="tablist">
+        ${filterChip("todos", "Todos", progress.total, "neutral")}
+        ${filterChip("recontar", "Revisar", review, "review")}
+        ${filterChip("divergentes", "Com diferenca", progress.divergent, "red")}
+        ${filterChip("pendentes", "Sem contagem", empty, "gray")}
+      </div>
+    </section>
+  `;
+}
+
+function filterChip(filter, label, value, color) {
+  return `
+    <button class="filter-chip ${color} ${state.filter === filter ? "active" : ""}" data-filter="${filter}" type="button">
+      <span></span>${label} <strong data-filter-count="${filter}">${formatIntegerDisplay(value)}</strong>
+    </button>
+  `;
+}
+
+function renderConferenceFooter(conf, blockMessage) {
+  const progress = getProgress(conf);
+  const isCompleted = conf.status === "Concluida";
+  return `
+    <footer class="conference-footer">
+      <div>
+        <strong data-footer-counted>${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)} contados</strong>
+        <span><kbd>Enter</kbd> proximo item</span>
+        <span><kbd>Shift</kbd> + <kbd>Enter</kbd> item anterior</span>
+      </div>
+      <button class="primary-btn" id="finishConferenceFooter" type="button" ${(blockMessage || isCompleted) ? `disabled title="${isCompleted ? "Conferencia ja concluida" : blockMessage}"` : ""}>${isCompleted ? "Contagem concluida" : "Concluir contagem"}</button>
+    </footer>
+  `;
 }
 
 function filteredRows(conf) {
+  const query = state.search.trim().toLowerCase();
   return conf.rows.filter((row) => {
     const diff = getDiff(row);
     const matchFilter =
@@ -771,7 +824,10 @@ function filteredRows(conf) {
       (state.filter === "divergentes" && diff !== null && diff !== 0) ||
       (state.filter === "recontar" && (row.movement !== "same" || row.fisicaHerdada)) ||
       (state.filter === "pendentes" && diff === null);
-    return matchFilter;
+    const matchSearch = !query
+      || String(row.id).toLowerCase().includes(query)
+      || String(row.produto).toLowerCase().includes(query);
+    return matchFilter && matchSearch;
   });
 }
 
@@ -784,25 +840,28 @@ function tableRow(conf, row) {
     : previousQuantity
       ? `<div class="qty-stack"><span>${formatIntegerDisplay(row.quantidade)}</span><small>Antes: ${formatIntegerDisplay(previousQuantity)}</small></div>`
     : formatIntegerDisplay(row.quantidade);
-  const movementLabel = row.movement === "same" ? "Sem alteracao" : row.movement === "added" ? "Adicionado" : row.movement === "removed" ? "Removido" : signed(row.changedBy);
+  const movementLabel = row.movement === "same" ? "-" : row.movement === "added" ? "Adicionado" : row.movement === "removed" ? "Removido" : signed(row.changedBy);
   const movementColor = row.movement === "same" ? "gray" : row.movement === "removed" ? "red" : "blue";
+  const movementDisplay = row.movement === "same"
+    ? `<span class="movement-neutral" title="Sem alteracao">-</span>`
+    : `<span class="badge movement ${movementColor}">${movementLabel}</span>`;
   const changed = row.movement === "changed" ? "changed" : "";
   const inherited = row.fisicaHerdada ? "inherited" : "";
   return `
     <tr data-row="${conf.id}:${escapeHtml(row.id)}" class="${changed} ${inherited} ${row.movement === "added" ? "added" : ""} ${row.movement === "removed" ? "removed" : ""}">
       <td class="mono">${escapeHtml(row.id)}</td>
-      <td><div class="product-name">${escapeHtml(row.produto)}</div></td>
+      <td><div class="product-name" title="${escapeHtml(row.produto)}">${escapeHtml(row.produto)}</div></td>
       <td class="mono">${formatIntegerDisplay(row.reservados)}</td>
       <td class="mono">${quantityDisplay}</td>
       <td>
         <div class="physical-cell">
-          <input class="table-input qty-input ${row.fisicaHerdada ? "inherited-input" : ""}" inputmode="numeric" data-edit="${conf.id}:${row.id}:fisica" value="${escapeHtml(row.fisica)}" placeholder="Contar" />
+          <input class="table-input qty-input ${row.fisicaHerdada ? "inherited-input" : ""}" inputmode="numeric" data-edit="${conf.id}:${row.id}:fisica" value="${escapeHtml(row.fisica)}" placeholder="-" aria-label="Qtd fisica de ${escapeHtml(row.produto)}" />
           ${row.fisicaHerdada ? `<button class="confirm-inherited" data-confirm-inherited="${conf.id}:${escapeHtml(row.id)}" type="button" title="Confirmar quantidade herdada">OK</button>` : ""}
         </div>
       </td>
       <td class="delta ${diff > 0 ? "amber" : diff < 0 ? "red" : diff === 0 ? "green" : ""}" data-diff="${conf.id}:${escapeHtml(row.id)}">${diff === null ? "-" : signed(diff)}</td>
       <td data-status="${conf.id}:${escapeHtml(row.id)}"><span class="badge ${status.color}">${status.label}</span></td>
-      <td><span class="badge movement ${movementColor}">${movementLabel}</span></td>
+      <td>${movementDisplay}</td>
     </tr>
   `;
 }
@@ -812,11 +871,18 @@ function emptyState(title, text, action = "") {
 }
 
 function bindEvents() {
+  document.getElementById("sidebarToggle")?.addEventListener("click", () => {
+    state.sidebarCollapsed = !state.sidebarCollapsed;
+    render();
+  });
   document.querySelectorAll("[data-page]").forEach((button) => {
     button.addEventListener("click", () => setPage(button.dataset.page));
   });
   document.querySelectorAll("[data-open]").forEach((button) => {
-    button.addEventListener("click", () => setActiveConference(button.dataset.open, button.dataset.openFilter || "todos"));
+    button.addEventListener("click", (event) => {
+      if (event.target.closest("[data-stock-history], [data-delete-stock], [data-delete-conference]")) return;
+      setActiveConference(button.dataset.open, button.dataset.openFilter || "todos");
+    });
   });
   document.querySelectorAll("[data-filter]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -824,16 +890,25 @@ function bindEvents() {
       render();
     });
   });
+  const conferenceSearch = document.getElementById("conferenceSearch");
+  conferenceSearch?.addEventListener("input", () => {
+    state.search = conferenceSearch.value;
+    render();
+    document.getElementById("conferenceSearch")?.focus();
+  });
   document.querySelectorAll(".stock-row[data-stock]").forEach((row) => {
     row.addEventListener("click", (event) => {
       if (event.target.closest("button")) return;
-      toggleStockHistory(row.dataset.stock);
+      setActiveConference(row.dataset.open, row.dataset.openFilter || "todos");
     });
     row.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
-      toggleStockHistory(row.dataset.stock);
+      setActiveConference(row.dataset.open, row.dataset.openFilter || "todos");
     });
+  });
+  document.querySelectorAll("[data-stock-history]").forEach((button) => {
+    button.addEventListener("click", () => toggleStockHistory(button.dataset.stockHistory));
   });
   document.querySelectorAll("[data-delete-stock]").forEach((button) => {
     button.addEventListener("click", () => deleteStock(button.dataset.deleteStock));
@@ -846,8 +921,14 @@ function bindEvents() {
   document.getElementById("stockImportButton")?.addEventListener("click", openStockImport);
   document.getElementById("emptyStockImportButton")?.addEventListener("click", openStockImport);
   stockPdfInput?.addEventListener("change", async () => {
-    await importStockPdfFiles([...stockPdfInput.files]);
+    await importStockPdfFiles([...stockPdfInput.files], { navigateToLatest: false });
     stockPdfInput.value = "";
+  });
+  const conferencePdfInput = document.getElementById("conferencePdfInput");
+  document.getElementById("conferenceImportButton")?.addEventListener("click", () => conferencePdfInput?.click());
+  conferencePdfInput?.addEventListener("change", async () => {
+    await importStockPdfFiles([...conferencePdfInput.files], { navigateToLatest: true });
+    conferencePdfInput.value = "";
   });
   document.querySelectorAll("[data-confirm-inherited]").forEach((button) => {
     button.addEventListener("click", () => confirmInheritedPhysical(button.dataset.confirmInherited));
@@ -872,8 +953,9 @@ function bindEvents() {
   }
 
   const finishConference = document.getElementById("finishConference");
-  if (finishConference) {
-    finishConference.addEventListener("click", () => {
+  const finishConferenceFooter = document.getElementById("finishConferenceFooter");
+  [finishConference, finishConferenceFooter].filter(Boolean).forEach((button) => {
+    button.addEventListener("click", () => {
       const conf = activeConference();
       const progress = getProgress(conf);
       if (progress.inherited > 0) {
@@ -889,7 +971,7 @@ function bindEvents() {
       showToast("Conferencia concluida.");
       render();
     });
-  }
+  });
 
   bindBackupEvents();
   bindImportEvents();
@@ -948,7 +1030,7 @@ function deleteStock(stockName) {
   else render();
 }
 
-async function importStockPdfFiles(files) {
+async function importStockPdfFiles(files, options = {}) {
   const pdfs = files.filter((file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf");
   if (!pdfs.length) return;
 
@@ -977,6 +1059,10 @@ async function importStockPdfFiles(files) {
   saveData();
   state.activeStockName = lastConference.stockName;
   showToast(`${imported} relatorio${imported > 1 ? "s" : ""} importado${imported > 1 ? "s" : ""}.`);
+  if (options.navigateToLatest && lastConference) {
+    navigateToConference(lastConference.id, getPriorityFilter(lastConference));
+    return;
+  }
   render();
 }
 
@@ -1106,30 +1192,49 @@ function updateLiveBadges(conf) {
   const eyebrow = document.querySelector(".eyebrow");
   if (eyebrow) eyebrow.textContent = conf.status;
   const finishButton = document.getElementById("finishConference");
+  const finishFooterButton = document.getElementById("finishConferenceFooter");
+  const isCompleted = conf.status === "Concluida";
   if (finishButton) {
-    finishButton.textContent = "Concluir";
-    finishButton.disabled = Boolean(blockMessage);
-    finishButton.title = blockMessage;
+    finishButton.textContent = isCompleted ? "Concluida" : "Concluir";
+    finishButton.disabled = Boolean(blockMessage) || isCompleted;
+    finishButton.title = isCompleted ? "Conferencia ja concluida" : blockMessage;
+  }
+  if (finishFooterButton) {
+    finishFooterButton.textContent = isCompleted ? "Contagem concluida" : "Concluir contagem";
+    finishFooterButton.disabled = Boolean(blockMessage) || isCompleted;
+    finishFooterButton.title = isCompleted ? "Conferencia ja concluida" : blockMessage;
   }
   const countedStat = document.querySelector('[data-stat="counted"]');
   const reviewStat = document.querySelector('[data-stat="review"]');
   const divergentStat = document.querySelector('[data-stat="divergent"]');
   const emptyStat = document.querySelector('[data-stat="empty"]');
+  const footerCounted = document.querySelector("[data-footer-counted]");
   if (countedStat) countedStat.textContent = `${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)}`;
   if (reviewStat) reviewStat.textContent = formatIntegerDisplay(getReviewCount(conf));
   if (divergentStat) divergentStat.textContent = formatIntegerDisplay(progress.divergent);
   if (emptyStat) emptyStat.textContent = formatIntegerDisplay(getEmptyCount(conf));
+  if (footerCounted) footerCounted.textContent = `${formatIntegerDisplay(progress.counted)}/${formatIntegerDisplay(progress.total)} contados`;
+  document.querySelector('[data-filter-count="todos"]')?.replaceChildren(String(formatIntegerDisplay(progress.total)));
+  document.querySelector('[data-filter-count="recontar"]')?.replaceChildren(String(formatIntegerDisplay(getReviewCount(conf))));
+  document.querySelector('[data-filter-count="divergentes"]')?.replaceChildren(String(formatIntegerDisplay(progress.divergent)));
+  document.querySelector('[data-filter-count="pendentes"]')?.replaceChildren(String(formatIntegerDisplay(getEmptyCount(conf))));
 }
 
 function moveOnEnter(event) {
-  if (event.key !== "Enter") return;
-  event.preventDefault();
   const inputs = [...document.querySelectorAll(".qty-input")];
   const index = inputs.indexOf(event.currentTarget);
-  const next = inputs[index + 1];
-  if (next) {
-    next.focus();
-    next.select();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.currentTarget.value = "";
+    updateCell(event.currentTarget.dataset.edit, "");
+    return;
+  }
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  const target = event.shiftKey ? inputs[index - 1] : inputs[index + 1];
+  if (target) {
+    target.focus();
+    target.select();
   }
 }
 
