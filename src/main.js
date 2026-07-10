@@ -1071,9 +1071,9 @@ async function importConferenceFromPdf(file) {
   const text = await readPdfText(file);
   const meta = parsePdfMeta(text, fallback);
   const rows = parseRows(text);
-  if (!rows.length) return null;
-
   const previous = latestByStock(meta.stockName);
+  if (!rows.length && !previous) return null;
+
   const conference = createConference({
     stockName: meta.stockName,
     reportDate: meta.reportDate,
@@ -1295,8 +1295,11 @@ async function handleFile(file) {
       setImportPreview(`${rows.length} itens reconhecidos. Confira estoque e data antes de criar a conferencia.`);
       showToast(`${rows.length} itens extraidos do PDF.`);
     } else {
-      setImportPreview("Nenhum item reconhecido neste PDF. Verifique se o arquivo e textual e segue o modelo do relatorio.");
-      showToast("PDF lido, mas a tabela nao foi identificada.");
+      const previous = latestByStock(pdfMeta.stockName);
+      setImportPreview(previous
+        ? "Nenhum item encontrado neste relatorio. Ao criar a conferencia, os itens do relatorio anterior serao considerados zerados."
+        : "Nenhum item reconhecido neste PDF. Verifique se o arquivo e textual e segue o modelo do relatorio.");
+      showToast(previous ? "Relatorio sem itens: estoque anterior sera zerado." : "PDF lido, mas a tabela nao foi identificada.");
     }
   } catch (error) {
     setImportPreview(`Falha na leitura automatica: ${error.message || "erro desconhecido"}`);
@@ -1316,12 +1319,12 @@ function finishImportFlow() {
   const reportDate = document.getElementById("reportDate").value;
   const fileName = document.getElementById("fileName").value || "relatorio.pdf";
   const rows = state.importRows;
-  if (!stockName || !reportDate || !rows.length) {
+  const previous = stockName ? latestByStock(stockName) : null;
+  if (!stockName || !reportDate || (!rows.length && !previous)) {
     showToast("Selecione um PDF valido antes de criar a conferencia.");
     return;
   }
 
-  const previous = latestByStock(stockName);
   const conference = createConference({
     stockName,
     reportDate,
