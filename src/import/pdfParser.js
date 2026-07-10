@@ -51,12 +51,23 @@ export async function readPdfText(file) {
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    pages.push(groupPdfItemsIntoRows(content.items).join("\n"));
+    pages.push(content.items);
   }
-  return pages.join("\n");
+  return groupPdfPagesIntoRows(pages).join("\n");
 }
 
-export function groupPdfItemsIntoRows(items) {
+export function groupPdfPagesIntoRows(pages) {
+  const lines = [];
+  let columns = null;
+  for (const items of pages) {
+    const result = groupPdfItemsIntoRows(items, columns);
+    lines.push(...result);
+    columns = result.columns || columns;
+  }
+  return lines;
+}
+
+export function groupPdfItemsIntoRows(items, fallbackColumns = null) {
   const rows = [];
   for (const item of items) {
     const text = item.str.trim();
@@ -75,13 +86,17 @@ export function groupPdfItemsIntoRows(items) {
     .map((row) => ({ ...row, cells: row.cells.sort((a, b) => a.x - b.x) }))
     .sort((a, b) => b.y - a.y);
   const textRows = orderedRows.map(formatPdfTextRow);
-  const mappedRows = mapRowsByPdfHeaders(orderedRows);
+  const mapped = mapRowsByPdfHeaders(orderedRows, fallbackColumns);
+  const mappedRows = mapped.rows;
   if (mappedRows.length) {
-    return [
+    const lines = [
       ...textRows.filter((line) => /\bEM\s+\d{2}\/\d{2}\/\d{4}/i.test(line)),
       ...mappedRows,
     ];
+    lines.columns = mapped.columns;
+    return lines;
   }
+  textRows.columns = mapped.columns;
   return textRows;
 }
 
@@ -103,7 +118,7 @@ export function formatImportedRow(row) {
   return row.quantidadeExtra !== "" && row.quantidadeExtra !== undefined ? `${base} | ${row.quantidadeExtra}` : base;
 }
 
-function mapRowsByPdfHeaders(orderedRows) {
+function mapRowsByPdfHeaders(orderedRows, fallbackColumns = null) {
   const headerIndex = orderedRows.findIndex((row) => {
     const labels = row.cells.map((cell) => normalizeHeader(cell.text));
     return labels.includes("ID")
@@ -111,15 +126,18 @@ function mapRowsByPdfHeaders(orderedRows) {
       && labels.includes("RESERVADOS")
       && labels.includes("QUANTIDADE");
   });
-  if (headerIndex === -1) return [];
+  if (headerIndex === -1 && !fallbackColumns) return { rows: [], columns: null };
 
-  const columns = buildPdfColumns(orderedRows[headerIndex].cells);
+  const columns = headerIndex === -1 ? fallbackColumns : buildPdfColumns(orderedRows[headerIndex].cells);
   const required = ["ID", "PRODUTO", "RESERVADOS", "QUANTIDADE"];
-  if (!required.every((key) => columns.some((column) => column.key === key))) return [];
+  if (!required.every((key) => columns.some((column) => column.key === key))) return { rows: [], columns: null };
 
   const imported = [];
   let current = null;
-  for (const row of orderedRows.slice(headerIndex + 1)) {
+  const dataRows = orderedRows.slice(headerIndex === -1 ? 0 : headerIndex + 1);
+  for (const row of dataRows) {
+    const line = formatPdfTextRow(row);
+    if (shouldIgnoreImportLine(line)) continue;
     const values = valuesByPdfColumn(row.cells, columns);
     const id = joinPdfCell(values.ID);
     if (isLikelyId(id)) {
@@ -148,7 +166,7 @@ function mapRowsByPdfHeaders(orderedRows) {
   }
   if (current && isCompleteMappedRow(current)) imported.push(current);
 
-  return imported
+  const rows = imported
     .filter((row) => !isTotalImportRow(row))
     .map((row) => [
       row.id,
@@ -157,6 +175,7 @@ function mapRowsByPdfHeaders(orderedRows) {
       row.quantidade,
       row.quantidadeExtra || "",
     ].join(" | "));
+  return { rows, columns };
 }
 
 function buildPdfColumns(headerCells) {

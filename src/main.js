@@ -1057,7 +1057,7 @@ async function importStockPdfFiles(files, options = {}) {
   }
 
   saveData();
-  state.activeStockName = lastConference.stockName;
+  state.activeStockName = "";
   showToast(`${imported} relatorio${imported > 1 ? "s" : ""} importado${imported > 1 ? "s" : ""}.`);
   if (options.navigateToLatest && lastConference) {
     navigateToConference(lastConference.id, getPriorityFilter(lastConference));

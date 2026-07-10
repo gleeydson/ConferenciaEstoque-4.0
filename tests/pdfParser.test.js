@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatImportedRow, groupPdfItemsIntoRows, parseFileMeta, parsePdfMeta, parseRows } from "../src/import/pdfParser.js";
+import { formatImportedRow, groupPdfItemsIntoRows, groupPdfPagesIntoRows, parseFileMeta, parsePdfMeta, parseRows } from "../src/import/pdfParser.js";
 
 function item(text, x, y) {
   return { str: text, transform: [1, 0, 0, 1, x, y] };
@@ -46,6 +46,44 @@ test("maps normal stock rows without mixing cost into quantity", () => {
   assert.equal(rows[0].reservados, 20);
   assert.equal(rows[0].quantidade, 1466);
   assert.equal(rows[0].quantidadeExtra, "");
+});
+
+test("reuses PDF column layout on pages without repeated header", () => {
+  const lines = groupPdfPagesIntoRows([
+    [
+      item("2.12 - ESTOQUE MATERIAL EM 06/07/2026 16:32:07", 345, 742),
+      item("ID", 53, 714),
+      item("PRODUTO", 273, 714),
+      item("CATEGORIA", 603, 714),
+      item("ALÍQUOTA", 761, 714),
+      item("RESERVADOS", 812, 714),
+      item("QUANTIDADE", 870, 714),
+      item("CUSTO", 937, 714),
+      item("1001", 46, 689),
+      item("ADAPTADOR SC/PC", 88, 689),
+      item("MATERIAL PARA INSTALACAO CLIENTE VIA FIBRA", 499, 689),
+      item("0,00", 846, 689),
+      item("41,00", 887, 689),
+      item("0,474596", 942, 689),
+    ],
+    [
+      item("PÁGINA 2", 1030, 742),
+      item("17368", 46, 689),
+      item("BUCHA DE NYLON-06MM", 88, 689),
+      item("MATERIAL PARA INSTALACAO CLIENTE VIA FIBRA", 499, 689),
+      item("20,00", 846, 689),
+      item("1.466,00", 887, 689),
+      item("0,030240", 942, 689),
+      item("44,33", 985, 689),
+    ],
+  ]);
+  const rows = parseRows(lines.join("\n"));
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].id, "17368");
+  assert.equal(rows[1].reservados, 20);
+  assert.equal(rows[1].quantidade, 1466);
+  assert.equal(rows[1].quantidadeExtra, "");
 });
 
 test("ignores total footer rows", () => {
