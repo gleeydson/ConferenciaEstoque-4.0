@@ -892,9 +892,12 @@ function bindEvents() {
   });
   const conferenceSearch = document.getElementById("conferenceSearch");
   conferenceSearch?.addEventListener("input", () => {
+    const cursorPosition = conferenceSearch.selectionStart ?? conferenceSearch.value.length;
     state.search = conferenceSearch.value;
     render();
-    document.getElementById("conferenceSearch")?.focus();
+    const nextSearch = document.getElementById("conferenceSearch");
+    nextSearch?.focus();
+    nextSearch?.setSelectionRange(cursorPosition, cursorPosition);
   });
   document.querySelectorAll(".stock-row[data-stock]").forEach((row) => {
     row.addEventListener("click", (event) => {
